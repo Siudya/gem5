@@ -30,8 +30,17 @@ Delegato dual-chiplet full-system ARM simulation script.
 Topology: 4×12 CustomMesh, 2 chiplets with D2D links.
 Default parameters match the Delegato paper (MICRO '25, Table 3).
 
-Usage:
-    gem5.opt delegato_fs.py --kernel <Image> --initrd <cpio.gz> [options]
+Modes of operation:
+  Normal:       gem5.opt delegato_fs.py --kernel <Image> --initrd <cpio.gz> --cpu o3
+  Fast-forward: gem5.opt delegato_fs.py ... --cpu o3 --fast-forward
+                Boot with TimingSimpleCPU, switch to target CPU on ROI start.
+  Save ckpt:    gem5.opt delegato_fs.py ... --save-checkpoint
+                Boot with TimingSimpleCPU, save checkpoint on ROI start, exit.
+  Restore:      gem5.opt delegato_fs.py ... --cpu o3 --restore <cpt_dir>
+                Restore from checkpoint, switch to target CPU, run ROI.
+
+The --fast-forward and --save-checkpoint modes require the guest to call
+gem5 m5_checkpoint pseudo-instruction at ROI start (see test_init.c).
 """
 
 import argparse
@@ -57,20 +66,62 @@ from common.cores.arm import (
 )
 from ruby import Ruby
 
+
+# ─── O3 CPU tuned to Delegato paper Table 3 ─────────────────────────────
+
+class DelegatoO3CPU(O3_ARM_v7a.O3_ARM_v7a_3):
+    """O3 CPU configuration matching Delegato paper Table 3."""
+
+    # Pipeline width (Table 3: fetch/decode/commit = 8)
+    fetchWidth = 8
+    decodeWidth = 8
+    renameWidth = 8
+    commitWidth = 8
+    squashWidth = 8
+
+    # Dispatch/Issue width (Table 3: 13)
+    dispatchWidth = 13
+    issueWidth = 13
+    wbWidth = 13
+
+    # ROB and queue sizes (Table 3)
+    numROBEntries = 224
+    LQEntries = 76
+    SQEntries = 58
+
+    # Scale IQ and physical registers for wider pipeline
+    numIQEntries = 97
+    numPhysIntRegs = 280
+    numPhysFloatRegs = 256
+    numPhysVecRegs = 256
+
+    # Wider fetch buffer for 8-wide fetch
+    fetchBufferSize = 64
+
+
 cpu_types = {
     "atomic": NonCachingSimpleCPU,
     "timing": TimingSimpleCPU,
     "minor": MinorCPU,
     "hpi": HPI.HPI,
-    "o3": O3_ARM_v7a.O3_ARM_v7a_3,
+    "o3": DelegatoO3CPU,
 }
 
+
+# ─── System creation ─────────────────────────────────────────────────────
 
 def create(args):
     """Create and configure the system."""
 
-    cpu_class = cpu_types[args.cpu]
-    mem_mode = cpu_class.memory_mode()
+    # Determine boot CPU vs target CPU
+    if args.fast_forward or args.save_checkpoint or args.restore:
+        boot_cpu_class = TimingSimpleCPU
+        target_cpu_class = cpu_types[args.cpu]
+    else:
+        boot_cpu_class = cpu_types[args.cpu]
+        target_cpu_class = None
+
+    mem_mode = boot_cpu_class.memory_mode()
 
     system = devices.ArmRubySystem(
         args.mem_size,
@@ -78,19 +129,35 @@ def create(args):
         workload=ArmFsLinux(object_file=args.kernel),
     )
 
-    # CPU cluster
+    # CPU cluster (boot CPUs)
     system.cpu_cluster = [
         devices.ArmCpuCluster(
             system,
             args.num_cpus,
             args.cpu_freq,
             "1.0V",
-            cpu_class,
+            boot_cpu_class,
             None,  # L1I handled by Ruby/CHI
             None,  # L1D handled by Ruby/CHI
             None,  # L2 handled by Ruby/CHI
         )
     ]
+
+    # Create switched-out target CPUs for fast-forward / restore
+    # Follow gem5 standard pattern (configs/common/Simulation.py):
+    #   - Do NOT call createInterruptController() — interrupts transfer
+    #     via takeOverFrom() during m5.switchCpus()
+    if target_cpu_class and target_cpu_class is not boot_cpu_class:
+        switch_cpus = []
+        for i, boot_cpu in enumerate(system.cpu_cluster[0].cpus):
+            cpu = target_cpu_class(
+                switched_out=True,
+                cpu_id=boot_cpu.cpu_id,
+                clk_domain=boot_cpu.clk_domain,
+            )
+            cpu.createThreads()
+            switch_cpus.append(cpu)
+        system.switch_cpus = switch_cpus
 
     # PCI VirtIO block device (optional, for disk image)
     if args.disk_image:
@@ -150,26 +217,64 @@ def create(args):
         kernel_cmd.append("rw")
     if args.initrd:
         kernel_cmd.append("rdinit=/init")
+    if args.fast_forward or args.save_checkpoint:
+        kernel_cmd.append("gem5_m5ops=1")
 
     system.workload.command_line = " ".join(kernel_cmd)
 
     return system
 
 
-def run():
+# ─── Simulation loop ─────────────────────────────────────────────────────
+
+def run(args, root):
+    has_switch_cpus = hasattr(root.system, "switch_cpus")
+    switched = False
+
     while True:
         event = m5.simulate()
         exit_msg = event.getCause()
+
         if exit_msg == "checkpoint":
-            print(f"Dropping checkpoint at tick {m5.curTick()}")
-            cpt_dir = os.path.join(m5.options.outdir, f"cpt.{m5.curTick()}")
-            m5.checkpoint(cpt_dir)
-            print("Checkpoint done.")
-        else:
-            print(f"{exit_msg} @ {m5.curTick()}")
+            if args.save_checkpoint:
+                cpt_dir = os.path.join(
+                    m5.options.outdir, f"cpt.{m5.curTick()}"
+                )
+                m5.checkpoint(cpt_dir)
+                print(f"Checkpoint saved: {cpt_dir}")
+                sys.exit(0)
+
+            elif has_switch_cpus and not switched:
+                system = root.system
+                n = len(system.switch_cpus)
+                switch_cpu_list = [
+                    (system.cpu_cluster[0].cpus[i], system.switch_cpus[i])
+                    for i in range(n)
+                ]
+                print(f"Switching {n} CPUs to {args.cpu} @ tick {m5.curTick()}")
+                m5.switchCpus(system, switch_cpu_list)
+                switched = True
+                print("CPU switch complete, ROI begins")
+            else:
+                # Normal checkpoint (no fast-forward)
+                cpt_dir = os.path.join(
+                    m5.options.outdir, f"cpt.{m5.curTick()}"
+                )
+                m5.checkpoint(cpt_dir)
+                print(f"Checkpoint saved: {cpt_dir}")
+
+        elif exit_msg == "m5_exit instruction encountered":
+            print(f"Simulation complete @ tick {m5.curTick()}")
             break
+
+        else:
+            print(f"{exit_msg} @ tick {m5.curTick()}")
+            break
+
     sys.exit(event.getCode())
 
+
+# ─── Main ─────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -196,6 +301,17 @@ def main():
                         help="CPU frequency (default: 3GHz)")
     parser.add_argument("-n", "--num-cpus", type=int, default=32,
                         help="Number of CPUs (default: 32)")
+
+    # Fast-forward / Checkpoint
+    parser.add_argument("--fast-forward", action="store_true",
+                        help="Boot with TimingSimpleCPU, switch to --cpu "
+                             "on ROI start (requires m5ops in guest)")
+    parser.add_argument("--save-checkpoint", action="store_true",
+                        help="Boot with TimingSimpleCPU, save checkpoint "
+                             "on ROI start and exit")
+    parser.add_argument("--restore", type=str, default=None,
+                        help="Restore from checkpoint directory and switch "
+                             "to --cpu type")
 
     # Memory
     parser.add_argument("--mem-type", default="DDR5_4400_4x8",
@@ -241,8 +357,23 @@ def main():
     root = Root(full_system=True)
     root.system = create(args)
 
-    m5.instantiate()
-    run()
+    if args.restore:
+        # Restore from checkpoint, then switch CPUs immediately
+        m5.instantiate(args.restore)
+        system = root.system
+        if hasattr(system, "switch_cpus"):
+            n = len(system.switch_cpus)
+            switch_cpu_list = [
+                (system.cpu_cluster[0].cpus[i], system.switch_cpus[i])
+                for i in range(n)
+            ]
+            print(f"Restored, switching {n} CPUs to {args.cpu}")
+            m5.switchCpus(system, switch_cpu_list)
+            print("CPU switch complete, resuming ROI")
+    else:
+        m5.instantiate()
+
+    run(args, root)
 
 
 if __name__ == "__m5_main__":
