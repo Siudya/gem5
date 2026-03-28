@@ -44,6 +44,7 @@ gem5 m5_checkpoint pseudo-instruction at ROI start (see test_init.c).
 """
 
 import argparse
+import math
 import os
 import sys
 
@@ -182,6 +183,16 @@ def create(args):
         system.realview.bootmem,
         cpus,
     )
+
+    block_size_bits = int(math.log(args.cacheline_size, 2))
+    if (1 << block_size_bits) != args.cacheline_size:
+        m5.fatal("--cacheline_size must be a power of 2")
+    for cpu in cpus:
+        cpu.l1d.policy_type = 3
+        cpu.l1d.amt_entries = 128
+        cpu.l1d.amt_assoc = 4
+        cpu.l1d.reuse_counter_bits = 5
+        cpu.l1d.cache_block_size_bits = block_size_bits
 
     system.ruby.clk_domain = SrcClockDomain(
         clock=args.ruby_clock, voltage_domain=system.voltage_domain

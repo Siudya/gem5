@@ -274,3 +274,15 @@ structure(RubyPrefetcherProxy, external = "yes") {
     // this for every RubyPrefetcherProxy object present
     void regProbePoints();
 }
+
+// DynAMO-Reuse-PN predictor for atomic memory operations.
+// Placed per-core alongside the L1D cache controller.
+structure(DynAMOPredictor, external = "yes") {
+    // Returns true for near execution, false for far.
+    // l1_state_code: 0=I, 1=SC, 2=SD
+    bool predictNear(Addr, int);
+    // Training: L1D hit on tracked line
+    void notifyHit(Addr);
+    // Training: line evicted or invalidated from L1D
+    void notifyEvictOrInval(Addr);
+}

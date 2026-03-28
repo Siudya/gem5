@@ -135,7 +135,14 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   // All Near executes all Atomics at L1 (variable set to 0; default)
   // Unique Near executes Atomics at HNF for states I, SC, SD (set to 1)
   // Present Near execites all Atomics at L1 except when state is I (set to 2)
+  // DynAMO-Reuse-PN uses per-line reuse prediction (set to 3)
   int policy_type := 0;
+
+  // DynAMO predictor parameters (only used when policy_type == 3)
+  int amt_entries := 128;
+  int amt_assoc := 4;
+  int reuse_counter_bits := 5;
+  int cache_block_size_bits := 6;
 
 
   // Use separate Comp/DBIDResp responses for WriteUnique
@@ -832,6 +839,9 @@ machine(MachineType:Cache, "Cache coherency protocol") :
 
   // Interface to prefetchers
   RubyPrefetcherProxy pfProxy, constructor="this, m_prefetcher_ptr, m_prefetchQueue_ptr";
+
+  // DynAMO-Reuse-PN predictor (per-core, only active when policy_type == 3)
+  DynAMOPredictor dynamo, constructor="m_amt_entries, m_amt_assoc, m_reuse_counter_bits, m_cache_block_size_bits";
 
 
   // DVM data
