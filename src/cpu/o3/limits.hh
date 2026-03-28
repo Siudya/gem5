@@ -34,7 +34,9 @@ namespace gem5
 namespace o3
 {
 
-static constexpr int MaxWidth = 12;
+// Delegato's O3 model uses a 13-wide dispatch/issue/writeback pipeline, so
+// keep the compiled O3 width cap above that configuration.
+static constexpr int MaxWidth = 16;
 static constexpr int MaxThreads = 4;
 
 } // namespace o3
