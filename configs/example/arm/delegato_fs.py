@@ -193,6 +193,10 @@ def create(args):
         boot_loader=[SysPaths.binary("boot.arm64")]
     )
 
+    # Keep the guest serial console in a dedicated outdir file so xmake can
+    # tail it deterministically while still allowing interactive m5term use.
+    system.terminal.outfile = "file"
+
     if args.dtb:
         system.workload.dtb_filename = args.dtb
     else:
@@ -207,7 +211,9 @@ def create(args):
 
     # Kernel command line
     kernel_cmd = [
+        "earlycon=pl011,0x1c090000",
         "console=ttyAMA0",
+        "loglevel=8",
         "lpj=19988480",
         "norandmaps",
         f"mem={args.mem_size}",
