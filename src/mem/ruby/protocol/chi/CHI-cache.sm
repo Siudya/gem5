@@ -136,6 +136,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   // Unique Near executes Atomics at HNF for states I, SC, SD (set to 1)
   // Present Near execites all Atomics at L1 except when state is I (set to 2)
   // DynAMO-Reuse-PN uses per-line reuse prediction (set to 3)
+  // Delegato uses Unique-near-else-far at L1D (set to 4)
   int policy_type := 0;
 
   // DynAMO predictor parameters (only used when policy_type == 3)
@@ -143,6 +144,20 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   int amt_assoc := 4;
   int reuse_counter_bits := 5;
   int cache_block_size_bits := 6;
+
+  // Delegato Reuse Table parameters (eviction-spill store used by the
+  // three-signal reuse_bit approximation; resident-line reuse is tracked by
+  // amoReuseCount and upstream_unique is evaluated directly in SLICC)
+  int delegato_rt_entries := 128;
+  int delegato_rt_assoc := 2;
+
+  // HN-F Delegato Predictor Table policy
+  // 0 = no predictor (default); 1 = Delegato predictor enabled
+  int hnf_policy_type := 0;
+
+  // Delegato Predictor Table parameters (used when hnf_policy_type == 1, at HN-F)
+  int delegato_pt_entries := 128;
+  int delegato_pt_assoc := 2;
 
 
   // Use separate Comp/DBIDResp responses for WriteUnique
@@ -343,6 +358,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     SnpNotSharedDirtyFwd,        desc="", in_trans="yes";
     SnpUnique,                   desc="", in_trans="yes";
     SnpUniqueFwd,                desc="", in_trans="yes";
+    SnpAMO,                      desc="Delegato: snoop carrying atomic op", in_trans="yes";
     SnpOnce,                     desc="", in_trans="yes";
     SnpOnceFwd,                  desc="", in_trans="yes";
     SnpStalled, desc="", in_trans="yes"; // A snoop stall triggered from the inport
@@ -376,6 +392,8 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     SnpResp_UD_Fwded_I,      desc="";
     SnpResp_SC_Fwded_I,      desc="";
     SnpResp_SD_Fwded_I,      desc="";
+    SnpResp_AMO,             desc="Delegato: SnpAMO response, owner stays Unique, data forwarded";
+    SnpResp_AMO_NoFwd,       desc="Delegato: SnpAMO response, owner stays Unique, no data fwd";
     RetryAck,                desc="";
     RetryAck_PoC,            desc="";
     PCrdGrant,               desc="";
@@ -535,6 +553,13 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     SendSnpUniqueFwd,         desc="Send a SnpUniqueFwd to a single sharer";
     SendSnpCleanInvalid,      desc="Send a SnpCleanInvalid to all sharers";
     SendSnpCleanInvalidNoReq, desc="Send a SnpCleanInvalid to all sharers except requestor";
+    SendSnpAMO,               desc="Delegato: Send SnpAMO to owner carrying atomic op";
+    // SnpAMO owner-side response events
+    SendSnpAMOCompData,       desc="Delegato: Owner executes AMO & sends old data to fwdRequestor";
+    SendSnpAMOResp,           desc="Delegato: Owner sends SnpResp_AMO to HN-F with reuse_bit";
+    SendSnpAMONoFwdResp,      desc="Delegato: Owner sends SnpResp_AMO_NoFwd to HN-F (AtomicNoReturn)";
+    // Delegato Migrate: HN-F sends CompData with ownership to requester
+    SendMigrateCompData,      desc="Delegato: HN-F sends CompData_UD_PD to requester (Migrate)";
     // Snoop responses
     SendSnpData,                      desc="Send SnpRespData as snoop reply";
     SendSnpIResp,                     desc="Send SnpResp_I as snoop reply";
@@ -591,6 +616,10 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     DataBlock DataBlk,  desc="data for the block";
     bool HWPrefetched,  default="false", desc="Set if this cache entry was prefetched";
     RequestorID requestor,  desc="First requestor to fill this block";
+    // Delegato fix_2: L1D flag — set when local AMO hits on Unique line
+    bool amoReusedLocal, default="false", desc="Delegato: L1D local AMO reuse during this residency";
+    // Delegato fix_2: L2 live counter — 2-bit saturating, tracks AMO reuse intensity
+    int amoReuseCount, default="0", desc="Delegato: L2 AMO reuse counter (saturating 2-bit)";
   }
 
   // Directory entry
@@ -752,6 +781,12 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool is_req_hazard, desc="Snoop hazard with an outstanding request";
     bool is_repl_hazard, desc="Snoop hazard with an outstanding writeback request";
     bool is_stale,      desc="Request is now stale because of a snoop hazard";
+    bool is_snp_amo,    desc="Delegato: SnpAMO — owner executes atomic in place";
+    bool is_snp_amo_return, desc="Delegato: SnpAMO for AtomicReturn (send old data to requester)";
+    bool child_amo_reused,  desc="Delegato fix_2: L1D piggyback — child reported AMO reuse";
+    // Delegato fix_3: deferred reuse — applied when cache_entry becomes resident
+    int pendingAmoReuseInc, default="0", desc="Delegato: pending reuse increment for cache_entry";
+    bool seedAmoReuseAfterFill, default="false", desc="Delegato: Migrate seed to apply after fill";
 
     // Tracks requests sent downstream
     CHIRequestType pendReqType, desc="Sent request type";
@@ -842,6 +877,16 @@ machine(MachineType:Cache, "Cache coherency protocol") :
 
   // DynAMO-Reuse-PN predictor (per-core, only active when policy_type == 3)
   DynAMOPredictor dynamo, constructor="m_amt_entries, m_amt_assoc, m_reuse_counter_bits, m_cache_block_size_bits";
+
+  // Delegato Reuse Table: eviction-spill store for AMO reuse tracking.
+  // Training: L1D Callback_AtomicHit; L2 Profile_Eviction (amoReuseCount >= 2).
+  // Query: owner L2 calls queryAndResetReuse(addr, false) on SnpAMO;
+  //        returns eviction-spill signal only (upstream_unique / amoReuseCount
+  //        are evaluated directly in SLICC).
+  DelegatoReuseTable delegatoRT, constructor="m_delegato_rt_entries, m_delegato_rt_assoc, m_cache_block_size_bits";
+
+  // Delegato Predictor Table (per HN-F, only active when hnf_policy_type == 1)
+  DelegatoPredictorTable delegatoPT, constructor="m_delegato_pt_entries, m_delegato_pt_assoc, m_cache_block_size_bits";
 
 
   // DVM data

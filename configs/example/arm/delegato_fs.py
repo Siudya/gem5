@@ -187,12 +187,35 @@ def create(args):
     block_size_bits = int(math.log(args.cacheline_size, 2))
     if (1 << block_size_bits) != args.cacheline_size:
         m5.fatal("--cacheline_size must be a power of 2")
+
+    # AMO placement policy
+    # Policy map:  l1d_policy_type  hnf_policy_type
+    #   delegato        4                1           Delegato (C/D/M + RT + PT)
+    #   dynamo          3                0           DynAMO Reuse-PN (AMT in L1D)
+    #   unique-near     1                0           Unique-near baseline
+    #   all-far         5                0           All-far (always to HN-F)
+    policy_map = {
+        "delegato":     (4, 1),
+        "dynamo":       (3, 0),
+        "unique-near":  (1, 0),
+        "all-far":      (5, 0),
+    }
+    l1d_policy, hnf_policy = policy_map[args.amo_policy]
+    print("AMO policy: %s  (L1D policy_type=%d, HN-F hnf_policy_type=%d)"
+          % (args.amo_policy, l1d_policy, hnf_policy))
+
     for cpu in cpus:
-        cpu.l1d.policy_type = 3
-        cpu.l1d.amt_entries = 128
-        cpu.l1d.amt_assoc = 4
-        cpu.l1d.reuse_counter_bits = 5
+        cpu.l1d.policy_type = l1d_policy
         cpu.l1d.cache_block_size_bits = block_size_bits
+        cpu.l1d.delegato_rt_entries = 128
+        cpu.l1d.delegato_rt_assoc = 2
+
+    for hnf in system.ruby.hnf:
+        for cntrl in hnf.getAllControllers():
+            cntrl.hnf_policy_type = hnf_policy
+            cntrl.delegato_pt_entries = 128
+            cntrl.delegato_pt_assoc = 2
+            cntrl.cache_block_size_bits = block_size_bits
 
     system.ruby.clk_domain = SrcClockDomain(
         clock=args.ruby_clock, voltage_domain=system.voltage_domain
@@ -360,6 +383,13 @@ def main():
 
     # Ruby/Network
     Ruby.define_options(parser)
+
+    # AMO policy
+    parser.add_argument("--amo-policy", type=str, default="delegato",
+                        choices=["delegato", "dynamo", "unique-near", "all-far"],
+                        help="AMO placement policy: delegato (default), dynamo, "
+                             "unique-near (baseline), all-far")
+
     args = parser.parse_args()
 
     # Force topology and CHI config for Delegato

@@ -455,6 +455,9 @@ TBE allocateRequestTBE(Addr addr, CHIRequestMsg in_msg), return_by_pointer="yes"
   tbe.atomic_to_be_done := false;
   tbe.atomic_to_be_wb := false;
 
+  // Delegato fix_2: copy child AMO reuse piggyback from L1D writeback
+  tbe.child_amo_reused := in_msg.child_amo_reused;
+
   tbe.use_DMT := false;
   tbe.use_DCT := false;
 
@@ -522,6 +525,15 @@ TBE allocateSnoopTBE(Addr addr, CHIRequestMsg in_msg), return_by_pointer="yes" {
   tbe.txnId := in_msg.txnId;
 
   tbe.snpNeedsData := in_msg.retToSrc;
+
+  // Delegato: extract atomic operation for SnpAMO
+  if (in_msg.type == CHIRequestType:SnpAMO) {
+    tbe.is_snp_amo := true;
+    tbe.atomic_op := in_msg.atomic_op;
+    tbe.is_snp_amo_return := in_msg.retToSrc;
+    DPRINTF(RubySlicc, "allocateSnoopTBE: SnpAMO addr=%#x fwdReq=%d return=%d\n",
+            addr, in_msg.fwdRequestor, tbe.is_snp_amo_return);
+  }
 
   tbe.use_DMT := false;
   tbe.use_DCT := false;
@@ -1348,6 +1360,10 @@ Event respToEvent (CHIResponseType type, TBE tbe) {
     return Event:SnpResp_UD_Fwded_I;
   } else if (type == CHIResponseType:SnpResp_UC_Fwded_I) {
     return Event:SnpResp_UC_Fwded_I;
+  } else if (type == CHIResponseType:SnpResp_AMO) {
+    return Event:SnpResp_AMO;
+  } else if (type == CHIResponseType:SnpResp_AMO_NoFwd) {
+    return Event:SnpResp_AMO_NoFwd;
   } else if (type == CHIResponseType:RetryAck) {
     if (is_HN) {
       if (on_hazard) {
@@ -1464,6 +1480,8 @@ Event snpToEvent (CHIRequestType type) {
     return Event:SnpDvmOpNonSync_P1;
   } else if (type == CHIRequestType:SnpDvmOpNonSync_P2) {
     return Event:SnpDvmOpNonSync_P2;
+  } else if (type == CHIRequestType:SnpAMO) {
+    return Event:SnpAMO;
   } else {
     error("Invalid CHIRequestType");
   }

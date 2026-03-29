@@ -81,6 +81,7 @@ enumeration(CHIRequestType, desc="") {
   SnpShared;
   SnpUnique;
   SnpCleanInvalid;
+  SnpAMO;
   SnpDvmOpSync_P1;
   SnpDvmOpSync_P2;
   SnpDvmOpNonSync_P1;
@@ -126,6 +127,9 @@ structure(CHIRequestMsg, desc="", interface="Message") {
 
   MessageSizeType MessageSize, default="MessageSizeType_Control";
 
+  // Delegato fix_2: L1D piggybacks AMO reuse flag on writeback to L2
+  bool child_amo_reused, default="false", desc="Delegato: L1D AMO reuse on this line";
+
   // No data for functional access
   bool functionalRead(Packet *pkt) { return false; }
   bool functionalRead(Packet *pkt, WriteMask &mask) { return false; }
@@ -155,6 +159,8 @@ enumeration(CHIResponseType, desc="...") {
   SnpResp_UD_Fwded_I;
   SnpResp_SC_Fwded_I;
   SnpResp_SD_Fwded_I;
+  SnpResp_AMO;           // Delegato: owner stays Unique after SnpAMO, data forwarded to requester
+  SnpResp_AMO_NoFwd;     // Delegato: owner stays Unique after SnpAMO, no data forwarded (AtomicNoReturn)
 
   RetryAck;
   PCrdGrant;
@@ -171,6 +177,7 @@ structure(CHIResponseMsg, desc="", interface="Message") {
   bool usesTxnId,       desc="True if using a Transaction ID", default="false";
   Addr txnId,           desc="Transaction ID", default="0";
   Addr dbid,            desc="Data Buffer ID", default="0";
+  bool reuse_bit,       desc="Delegato reuse feedback from owner", default="false";
   //NOTE: not in CHI and for debuging only
 
   MessageSizeType MessageSize, default="MessageSizeType_Control";

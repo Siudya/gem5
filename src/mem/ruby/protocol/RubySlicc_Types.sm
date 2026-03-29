@@ -286,3 +286,29 @@ structure(DynAMOPredictor, external = "yes") {
     // Training: line evicted or invalidated from L1D
     void notifyEvictOrInval(Addr);
 }
+
+// Delegato Reuse Table: eviction-spill store for AMO reuse tracking.
+// Instantiated in every cache controller; meaningful training/query at L2.
+// L1D trains via Callback_AtomicHit; L2 spills via Profile_Eviction.
+// Query on SnpAMO: returns eviction-spill signal only (upstream_unique
+// and amoReuseCount are evaluated in SLICC separately).
+structure(DelegatoReuseTable, external = "yes") {
+    // Notify: local AMO on a Unique line, or eviction spill of reuse
+    void notifyLocalUniqueAmo(Addr);
+    // Query eviction-spill reuse_bit and reset.
+    // upstream_unique is always false in current usage.
+    bool queryAndResetReuse(Addr, bool);
+}
+
+// Delegato Predictor Table: per HN-F/LLC slice structure.
+// CA/PC/PO state machine for far-AMO placement decisions.
+structure(DelegatoPredictorTable, external = "yes") {
+    // Decide action for a far AMO. req_id=requester core index,
+    // has_owner=true if dir state has unique owner (RU).
+    // Returns: 0=Centralize, 1=Delegate, 2=Migrate
+    int decideAction(Addr, NodeID, bool);
+    // Update based on reuse_bit feedback from Delegate SnpResp
+    void updateReuseFeedback(Addr, bool);
+    // Debug: get current state (-1=miss, 0=CA, 1=PC, 2=PO)
+    int getState(Addr);
+}

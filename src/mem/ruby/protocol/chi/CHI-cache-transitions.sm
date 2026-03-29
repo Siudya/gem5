@@ -952,6 +952,23 @@ transition(BUSY_INTR, {SnpOnce,SnpOnceFwd}, BUSY_BLKD) {
   ProcessNextState;
 }
 
+// SnpAMO (Delegato: owner executes atomic in place, keeps ownership)
+// Only valid when owner has Unique data (UD, UC, and their sub-states)
+transition({UD,UC,UD_RSC,UC_RSC,UD_RU,UC_RU,UD_RSD},
+           SnpAMO, BUSY_BLKD) {
+  Initiate_Snoop;
+  Initiate_SnpAMO;
+  Pop_SnoopRdyQueue;
+  ProcessNextState;
+}
+
+transition(BUSY_INTR, SnpAMO, BUSY_BLKD) {
+  Initiate_Snoop_Hazard;
+  Initiate_SnpAMO;
+  Pop_SnoopRdyQueue;
+  ProcessNextState;
+}
+
 // Stash
 transition({I,SC,UC,SD,UD,RU,RSC,RSD,RUSD,SC_RSC,UC_RSC,SD_RSC,UD_RSC,UC_RU,UD_RU,UD_RSD,SD_RSD,RUSC},
            {StashOnceShared,StashOnceUnique}, BUSY_BLKD) {
@@ -995,7 +1012,7 @@ transition(UD_T, {Global_Eviction, Local_Eviction, LocalHN_Eviction}, UD) {
 
 transition(BUSY_BLKD,
             {SnpCleanInvalid,SnpShared,SnpUnique,SnpSharedFwd,SnpUniqueFwd,
-            SnpOnce,SnpOnceFwd,SnpNotSharedDirtyFwd}) {
+            SnpOnce,SnpOnceFwd,SnpNotSharedDirtyFwd,SnpAMO}) {
   StallSnoop;
 }
 
@@ -1004,7 +1021,7 @@ transition({BUSY_BLKD,BUSY_INTR}, SnpStalled) {
 }
 
 transition(UD_T, {SnpCleanInvalid,SnpShared,SnpUnique,SnpSharedFwd,SnpUniqueFwd,
-                  SnpNotSharedDirtyFwd}) {
+                  SnpNotSharedDirtyFwd,SnpAMO}) {
   StallSnoop_NoTBE;
 }
 
@@ -1160,6 +1177,25 @@ transition(BUSY_BLKD, SendSnpFwdedData) {
 transition(BUSY_BLKD, SendSnpFwdedResp) {
   Pop_TriggerQueue;
   Send_FwdSnpResp;
+  ProcessNextState_ClearPending;
+}
+
+// Delegato SnpAMO trigger events (owner-side)
+transition(BUSY_BLKD, SendSnpAMOCompData) {
+  Pop_TriggerQueue;
+  Send_SnpAMOCompData;
+  ProcessNextState_ClearPending;
+}
+
+transition(BUSY_BLKD, SendSnpAMOResp) {
+  Pop_TriggerQueue;
+  Send_SnpAMOResp;
+  ProcessNextState_ClearPending;
+}
+
+transition(BUSY_BLKD, SendSnpAMONoFwdResp) {
+  Pop_TriggerQueue;
+  Send_SnpAMONoFwdResp;
   ProcessNextState_ClearPending;
 }
 
@@ -1320,6 +1356,19 @@ transition(BUSY_BLKD, SendSnpCleanInvalid) {
 transition(BUSY_BLKD, SendSnpCleanInvalidNoReq) {
   Pop_TriggerQueue;
   Send_SnpCleanInvalid_NoReq;
+  ProcessNextState_ClearPending;
+}
+
+// Delegato: HN-F sends SnpAMO to owner
+transition(BUSY_BLKD, SendSnpAMO) {
+  Pop_TriggerQueue;
+  Send_SnpAMO;
+  ProcessNextState_ClearPending;
+}
+
+transition(BUSY_BLKD, SendMigrateCompData) {
+  Pop_TriggerQueue;
+  Send_MigrateCompData;
   ProcessNextState_ClearPending;
 }
 
@@ -1558,6 +1607,21 @@ transition(BUSY_BLKD,
             SnpResp_UC_Fwded_I,SnpResp_UD_Fwded_I,
             SnpResp_SC_Fwded_I,SnpResp_SD_Fwded_I}) {
   Receive_SnpResp;
+  UpdateDirState_FromSnpResp;
+  Pop_RespInQueue;
+  ProcessNextState;
+}
+
+// Delegato: SnpAMO response at HN-F (owner kept data, update PT with reuse_bit)
+transition(BUSY_BLKD, SnpResp_AMO) {
+  Receive_SnpResp_AMO;
+  UpdateDirState_FromSnpResp;
+  Pop_RespInQueue;
+  ProcessNextState;
+}
+
+transition(BUSY_BLKD, SnpResp_AMO_NoFwd) {
+  Receive_SnpResp_AMO;
   UpdateDirState_FromSnpResp;
   Pop_RespInQueue;
   ProcessNextState;

@@ -59,5 +59,6 @@ Source('BankedArray.cc')
 Source('ALUFreeListArray.cc')
 Source('TBEStorage.cc')
 Source('DynAMOPredictor.cc')
+Source('DelegatoPredictor.cc')
 if env['CONF']['RUBY_PROTOCOL_CHI']:
     Source('MN_TBETable.cc')
