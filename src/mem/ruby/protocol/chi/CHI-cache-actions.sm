@@ -1224,13 +1224,24 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
   // Delegato PredictorTable: record AMO at HN-F (PoC path)
   bool delegato_handled := false;
   if (hnf_policy_type == 1) {
+    // Compute directory state category for predictor lookup
+    int dir_case := 3; // DIR_I
+    if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
+      dir_case := 2; // DIR_RU
+    } else if (tbe.dir_ownerExists || (tbe.dir_sharers.count() > 0)) {
+      dir_case := 1; // DIR_RSC_RSD
+    } else if (tbe.dataValid) {
+      dir_case := 0; // DIR_UC_UD
+    }
     int delegato_action := delegatoPT.decideAction(tbe.addr,
-        machineIDToNodeID(tbe.requestor), tbe.dir_ownerExists);
-    DPRINTF(RubySlicc, "Delegato PT (PoC): addr=%#x req=%d action=%d\n",
-            tbe.addr, machineIDToNodeID(tbe.requestor), delegato_action);
+        machineIDToNodeID(tbe.requestor), dir_case,
+        machineIDToNodeID(tbe.dir_owner));
+    DPRINTF(RubySlicc, "Delegato PT (PoC): addr=%#x req=%d dir_case=%d action=%d\n",
+            tbe.addr, machineIDToNodeID(tbe.requestor), dir_case, delegato_action);
 
     // Delegate: single exclusive owner, send SnpAMO instead of SnpUnique
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
+        tbe.dir_ownerIsExcl &&
         (tbe.dir_sharers.count() == 1) && tbe.dataMaybeDirtyUpstream) {
       DPRINTF(RubySlicc, "Delegato: AtomicReturn PoC Delegate to owner %d\n",
               tbe.dir_owner);
@@ -1279,9 +1290,19 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
 action(Initiate_AtomicReturn_WriteBack, desc="") {
   bool delegato_handled := false;
   if (hnf_policy_type == 1) {
+    int dir_case := 3;
+    if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
+      dir_case := 2;
+    } else if (tbe.dir_ownerExists || (tbe.dir_sharers.count() > 0)) {
+      dir_case := 1;
+    } else if (tbe.dataValid) {
+      dir_case := 0;
+    }
     int delegato_action := delegatoPT.decideAction(tbe.addr,
-        machineIDToNodeID(tbe.requestor), tbe.dir_ownerExists);
+        machineIDToNodeID(tbe.requestor), dir_case,
+        machineIDToNodeID(tbe.dir_owner));
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
+        tbe.dir_ownerIsExcl &&
         (tbe.dir_sharers.count() == 1) && tbe.dataMaybeDirtyUpstream) {
       DPRINTF(RubySlicc, "Delegato: AtomicReturn WriteBack Delegate to owner %d\n",
               tbe.dir_owner);
@@ -1330,13 +1351,23 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
 action(Initiate_AtomicNoReturn_LocalWrite, desc="") {
   bool delegato_handled := false;
   if (hnf_policy_type == 1) {
+    int dir_case := 3;
+    if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
+      dir_case := 2;
+    } else if (tbe.dir_ownerExists || (tbe.dir_sharers.count() > 0)) {
+      dir_case := 1;
+    } else if (tbe.dataValid) {
+      dir_case := 0;
+    }
     int delegato_action := delegatoPT.decideAction(tbe.addr,
-        machineIDToNodeID(tbe.requestor), tbe.dir_ownerExists);
-    DPRINTF(RubySlicc, "Delegato PT (PoC): addr=%#x req=%d action=%d\n",
-            tbe.addr, machineIDToNodeID(tbe.requestor), delegato_action);
+        machineIDToNodeID(tbe.requestor), dir_case,
+        machineIDToNodeID(tbe.dir_owner));
+    DPRINTF(RubySlicc, "Delegato PT (PoC): addr=%#x req=%d dir_case=%d action=%d\n",
+            tbe.addr, machineIDToNodeID(tbe.requestor), dir_case, delegato_action);
 
     // Delegate: single exclusive owner, send SnpAMO (no data return to requester)
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
+        tbe.dir_ownerIsExcl &&
         (tbe.dir_sharers.count() == 1) && tbe.dataMaybeDirtyUpstream) {
       DPRINTF(RubySlicc, "Delegato: AtomicNoReturn PoC Delegate to owner %d\n",
               tbe.dir_owner);
@@ -1379,9 +1410,19 @@ action(Initiate_AtomicNoReturn_LocalWrite, desc="") {
 action(Initiate_AtomicNoReturn_WriteBack, desc="") {
   bool delegato_handled := false;
   if (hnf_policy_type == 1) {
+    int dir_case := 3;
+    if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
+      dir_case := 2;
+    } else if (tbe.dir_ownerExists || (tbe.dir_sharers.count() > 0)) {
+      dir_case := 1;
+    } else if (tbe.dataValid) {
+      dir_case := 0;
+    }
     int delegato_action := delegatoPT.decideAction(tbe.addr,
-        machineIDToNodeID(tbe.requestor), tbe.dir_ownerExists);
+        machineIDToNodeID(tbe.requestor), dir_case,
+        machineIDToNodeID(tbe.dir_owner));
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
+        tbe.dir_ownerIsExcl &&
         (tbe.dir_sharers.count() == 1) && tbe.dataMaybeDirtyUpstream) {
       DPRINTF(RubySlicc, "Delegato: AtomicNoReturn WriteBack Delegate to owner %d\n",
               tbe.dir_owner);

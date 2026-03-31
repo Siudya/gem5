@@ -224,12 +224,17 @@ def create(args):
         cpu.l1d.delegato_rt_entries = 128
         cpu.l1d.delegato_rt_assoc = 2
 
+    cores_per_chiplet = max(1, args.num_cpus // 2)
+    hnf_idx = 0
     for hnf in system.ruby.hnf:
         for cntrl in hnf.getAllControllers():
             cntrl.hnf_policy_type = hnf_policy
             cntrl.delegato_pt_entries = 128
             cntrl.delegato_pt_assoc = 2
             cntrl.cache_block_size_bits = block_size_bits
+            cntrl.cores_per_chiplet = cores_per_chiplet
+            cntrl.hnf_chiplet_id = 0 if hnf_idx < cores_per_chiplet else 1
+            hnf_idx += 1
 
     system.ruby.clk_domain = SrcClockDomain(
         clock=args.ruby_clock, voltage_domain=system.voltage_domain

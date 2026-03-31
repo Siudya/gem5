@@ -159,6 +159,12 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   int delegato_pt_entries := 128;
   int delegato_pt_assoc := 2;
 
+  // Delegato chiplet locality parameters (used by Predictor Table)
+  // cores_per_chiplet: number of cores per chiplet (default: 16 for dual-chiplet 32-core)
+  // hnf_chiplet_id: this HN-F's chiplet (0 or 1)
+  int cores_per_chiplet := 16;
+  int hnf_chiplet_id := 0;
+
 
   // Use separate Comp/DBIDResp responses for WriteUnique
   bool comp_wu := "False";
@@ -886,7 +892,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   DelegatoReuseTable delegatoRT, constructor="m_delegato_rt_entries, m_delegato_rt_assoc, m_cache_block_size_bits";
 
   // Delegato Predictor Table (per HN-F, only active when hnf_policy_type == 1)
-  DelegatoPredictorTable delegatoPT, constructor="m_delegato_pt_entries, m_delegato_pt_assoc, m_cache_block_size_bits";
+  DelegatoPredictorTable delegatoPT, constructor="m_delegato_pt_entries, m_delegato_pt_assoc, m_cache_block_size_bits, m_cores_per_chiplet, m_hnf_chiplet_id";
 
 
   // DVM data

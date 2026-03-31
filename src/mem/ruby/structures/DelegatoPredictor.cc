@@ -149,9 +149,12 @@ DelegatoReuseTable::queryAndResetReuse(Addr addr, bool upstream_unique)
 // ===== DelegatoPredictorTable =====
 
 DelegatoPredictorTable::DelegatoPredictorTable(
-    int entries, int assoc, int block_size_bits)
+    int entries, int assoc, int block_size_bits,
+    int cores_per_chiplet, int hnf_chiplet_id)
     : m_assoc(assoc),
-      m_block_size_bits(block_size_bits)
+      m_block_size_bits(block_size_bits),
+      m_cores_per_chiplet(cores_per_chiplet),
+      m_hnf_chiplet_id(hnf_chiplet_id)
 {
     assert(entries > 0 && assoc > 0);
     assert(block_size_bits > 0);
@@ -225,28 +228,60 @@ DelegatoPredictorTable::touchLRU(PTEntry& entry)
 }
 
 int
-DelegatoPredictorTable::mapPolicyToAction(int policy_state, bool has_owner)
+DelegatoPredictorTable::getChiplet(NodeID nodeID) const
 {
-    // Map policy state + directory context to action
-    // (Figure 6b + Section 5.3 of paper)
+    if (m_cores_per_chiplet <= 0)
+        return 0;
+    int num_cpus = 2 * m_cores_per_chiplet;
+    return ((int)(nodeID % num_cpus)) / m_cores_per_chiplet;
+}
+
+bool
+DelegatoPredictorTable::isLocal(NodeID nodeID) const
+{
+    return getChiplet(nodeID) == m_hnf_chiplet_id;
+}
+
+int
+DelegatoPredictorTable::mapPolicyToAction(
+    int policy_state, int dir_case, bool req_local, bool owner_local)
+{
+    // Full strategy table from Delegato paper (Figure 6b / Section 5.3).
+    //
+    // | Policy | UC/UD | RSC/RSD | RU,Own.local | RU,Own.remote | I,Req.local | I,Req.remote |
+    // |--------|-------|---------|--------------|---------------|-------------|--------------|
+    // |  CA    |   C   |    C    |      D       |       C       |      M      |      C       |
+    // |  PC    |   C   |    C    |      C       |       C       |      M      |      M       |
+    // |  PO    |   M   |    M    |      D       |       D       |      M      |      M       |
     switch (policy_state) {
       case STATE_CA:
-        // Central All: Centralize by default.
-        // If has_owner (RU state), Delegate to let owner execute.
-        if (has_owner)
-            return ACTION_DELEGATE;
-        return ACTION_CENTRALIZE;
-
-      case STATE_PO:
-        // Pinned Owner: keep line at owner.
-        // If has_owner, Delegate; otherwise Centralize.
-        if (has_owner)
-            return ACTION_DELEGATE;
-        return ACTION_CENTRALIZE;
+        switch (dir_case) {
+          case DIR_UC_UD:   return ACTION_CENTRALIZE;
+          case DIR_RSC_RSD: return ACTION_CENTRALIZE;
+          case DIR_RU:
+            return owner_local ? ACTION_DELEGATE : ACTION_CENTRALIZE;
+          case DIR_I:
+            return req_local ? ACTION_MIGRATE : ACTION_CENTRALIZE;
+          default:          return ACTION_CENTRALIZE;
+        }
 
       case STATE_PC:
-        // Present Central: owner not reusing → always Centralize.
-        return ACTION_CENTRALIZE;
+        switch (dir_case) {
+          case DIR_UC_UD:   return ACTION_CENTRALIZE;
+          case DIR_RSC_RSD: return ACTION_CENTRALIZE;
+          case DIR_RU:      return ACTION_CENTRALIZE;
+          case DIR_I:       return ACTION_MIGRATE;
+          default:          return ACTION_CENTRALIZE;
+        }
+
+      case STATE_PO:
+        switch (dir_case) {
+          case DIR_UC_UD:   return ACTION_MIGRATE;
+          case DIR_RSC_RSD: return ACTION_MIGRATE;
+          case DIR_RU:      return ACTION_DELEGATE;
+          case DIR_I:       return ACTION_MIGRATE;
+          default:          return ACTION_MIGRATE;
+        }
 
       default:
         return ACTION_CENTRALIZE;
@@ -254,8 +289,12 @@ DelegatoPredictorTable::mapPolicyToAction(int policy_state, bool has_owner)
 }
 
 int
-DelegatoPredictorTable::decideAction(Addr addr, NodeID req_id, bool has_owner)
+DelegatoPredictorTable::decideAction(
+    Addr addr, NodeID req_id, int dir_case, NodeID owner_id)
 {
+    bool req_local = isLocal(req_id);
+    bool owner_local = isLocal(owner_id); // only meaningful for DIR_RU
+
     PTEntry* entry = lookup(addr);
 
     if (entry == nullptr) {
@@ -263,18 +302,18 @@ DelegatoPredictorTable::decideAction(Addr addr, NodeID req_id, bool has_owner)
         entry = allocate(addr);
         entry->last_req_id = req_id;
         entry->has_last_req = true;
-        return mapPolicyToAction(STATE_CA, has_owner);
+        return mapPolicyToAction(STATE_CA, dir_case, req_local, owner_local);
     }
 
     touchLRU(*entry);
 
     int policy = entry->policy_state;
 
-    // Check for same-requester repeat → upgrade to PO (Migrate)
-    // Paper Figure 6b: CA/PC + same_req → PO, action = Migrate
-    // Guard: Migrate requires an owner to exist (data must come from somewhere);
-    // if no owner, fall through to mapPolicyToAction which returns Centralize.
-    if (has_owner && entry->has_last_req && entry->last_req_id == req_id &&
+    // Same-requester repeat → upgrade CA/PC to PO, action = Migrate.
+    // Paper Figure 6b: CA/PC + same_req → PO.
+    // No has_owner guard: whether Migrate is physically executable
+    // is decided by the HN-F action layer, not the predictor.
+    if (entry->has_last_req && entry->last_req_id == req_id &&
         (policy == STATE_CA || policy == STATE_PC)) {
         entry->policy_state = STATE_PO;
         entry->last_req_id = req_id;
@@ -285,7 +324,7 @@ DelegatoPredictorTable::decideAction(Addr addr, NodeID req_id, bool has_owner)
     entry->last_req_id = req_id;
     entry->has_last_req = true;
 
-    return mapPolicyToAction(policy, has_owner);
+    return mapPolicyToAction(policy, dir_case, req_local, owner_local);
 }
 
 void
