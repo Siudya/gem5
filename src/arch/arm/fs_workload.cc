@@ -41,6 +41,7 @@
 #include "arch/arm/fs_workload.hh"
 
 #include "arch/arm/faults.hh"
+#include "base/loader/dtb_file.hh"
 #include "base/loader/object_file.hh"
 #include "base/loader/symtab.hh"
 #include "cpu/thread_context.hh"
@@ -120,6 +121,19 @@ FsWorkload::initState()
 
         inform("Using bootloader at address %#x", bootldr->entryPoint());
 
+        // Load DTB into physical memory so the bootloader can pass it
+        // to the kernel.  ArmFsLinux::initState() will overwrite this
+        // with a processed version that includes boot args / initrd.
+        if (!params().dtb_filename.empty() && params().dtb_addr) {
+            auto *dtb_file =
+                new loader::DtbFile(params().dtb_filename);
+            inform("Loading DTB file: %s at address %#x",
+                   params().dtb_filename, params().dtb_addr);
+            dtb_file->buildImage().offset(params().dtb_addr)
+                .write(system->physProxy);
+            delete dtb_file;
+        }
+
         // The address of the boot loader so we know
         // where to branch to after the reset fault
         // All other values needed by the boot loader to know what to do
@@ -130,11 +144,11 @@ FsWorkload::initState()
                  "gic_cpu_addr must be set with bootloader");
 
         for (auto *tc: arm_sys->threads) {
+            tc->setReg(int_reg::R0, params().dtb_addr);
             tc->setReg(int_reg::R3, kernelEntry);
             if (is_gic_v2)
                 tc->setReg(int_reg::R4, arm_sys->params().gic_cpu_addr);
-            if (getArch() == loader::Arm)
-                tc->setReg(int_reg::R5, params().cpu_release_addr);
+            tc->setReg(int_reg::R5, params().cpu_release_addr);
         }
         inform("Using kernel entry physical address at %#x\n", kernelEntry);
     } else {

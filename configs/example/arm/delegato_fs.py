@@ -38,9 +38,15 @@ Modes of operation:
                 Boot with TimingSimpleCPU, save checkpoint on ROI start, exit.
   Restore:      gem5.opt delegato_fs.py ... --cpu o3 --restore <cpt_dir>
                 Restore from checkpoint, switch to target CPU, run ROI.
+  Bare-metal:   gem5.opt delegato_fs.py --bare-metal <elf> --cpu timing
+                Boot bare-metal ELF directly (no Linux kernel).  The ELF
+                must be linked at 0x80080000 (VExpress physical RAM + 512K).
+                Uses boot.arm64 bootloader for DTB passing and spin-table
+                secondary CPU boot.
 
 The --fast-forward and --save-checkpoint modes require the guest to call
 gem5 m5_checkpoint pseudo-instruction at ROI start (see test_init.c).
+These modes are incompatible with --bare-metal.
 """
 
 import argparse
@@ -124,11 +130,19 @@ def create(args):
 
     mem_mode = boot_cpu_class.memory_mode()
 
-    system = devices.ArmRubySystem(
-        args.mem_size,
-        mem_mode=mem_mode,
-        workload=ArmFsLinux(object_file=args.kernel),
-    )
+    # Bare-metal vs Linux workload
+    if args.bare_metal:
+        system = devices.ArmRubySystem(
+            args.mem_size,
+            mem_mode=mem_mode,
+            workload=ArmFsWorkload(object_file=args.bare_metal),
+        )
+    else:
+        system = devices.ArmRubySystem(
+            args.mem_size,
+            mem_mode=mem_mode,
+            workload=ArmFsLinux(object_file=args.kernel),
+        )
 
     # CPU cluster (boot CPUs)
     system.cpu_cluster = [
@@ -227,6 +241,13 @@ def create(args):
         boot_loader=[SysPaths.binary("boot.arm64")]
     )
 
+    # Bare-metal: override load_addr_offset so the ELF is loaded at its
+    # link address (0x80080000) unchanged.  setupBootLoader already set
+    # dtb_addr (0x88000000) and cpu_release_addr (0x87FFFFF8) which
+    # remain correct.
+    if args.bare_metal:
+        system.workload.load_addr_offset = 0
+
     # Keep the guest serial console in a dedicated outdir file so xmake can
     # tail it deterministically while still allowing interactive m5term use.
     system.terminal.outfile = "file"
@@ -239,28 +260,29 @@ def create(args):
         )
         system.generateDtb(system.workload.dtb_filename)
 
-    # initrd support
-    if args.initrd:
-        system.workload.initrd_filename = args.initrd
+    if not args.bare_metal:
+        # initrd support
+        if args.initrd:
+            system.workload.initrd_filename = args.initrd
 
-    # Kernel command line
-    kernel_cmd = [
-        "earlycon=pl011,0x1c090000",
-        "console=ttyAMA0",
-        "loglevel=8",
-        "lpj=19988480",
-        "norandmaps",
-        f"mem={args.mem_size}",
-    ]
-    if args.disk_image:
-        kernel_cmd.append(f"root={args.root_device}")
-        kernel_cmd.append("rw")
-    if args.initrd:
-        kernel_cmd.append("rdinit=/init")
-    if args.fast_forward or args.save_checkpoint:
-        kernel_cmd.append("gem5_m5ops=1")
+        # Kernel command line
+        kernel_cmd = [
+            "earlycon=pl011,0x1c090000",
+            "console=ttyAMA0",
+            "loglevel=8",
+            "lpj=19988480",
+            "norandmaps",
+            f"mem={args.mem_size}",
+        ]
+        if args.disk_image:
+            kernel_cmd.append(f"root={args.root_device}")
+            kernel_cmd.append("rw")
+        if args.initrd:
+            kernel_cmd.append("rdinit=/init")
+        if args.fast_forward or args.save_checkpoint:
+            kernel_cmd.append("gem5_m5ops=1")
 
-    system.workload.command_line = " ".join(kernel_cmd)
+        system.workload.command_line = " ".join(kernel_cmd)
 
     return system
 
@@ -322,8 +344,11 @@ def main():
     )
 
     # System
-    parser.add_argument("--kernel", type=str, required=True,
-                        help="Path to kernel Image")
+    parser.add_argument("--kernel", type=str, default=None,
+                        help="Path to kernel Image (required unless --bare-metal)")
+    parser.add_argument("--bare-metal", type=str, default=None,
+                        help="Path to bare-metal ELF (linked at 0x80080000). "
+                             "Mutually exclusive with --kernel/--initrd/--fast-forward.")
     parser.add_argument("--initrd", type=str, default=None,
                         help="Path to initrd/initramfs (cpio.gz)")
     parser.add_argument("--disk-image", type=str, default=None,
@@ -391,6 +416,21 @@ def main():
                              "unique-near (baseline), all-far")
 
     args = parser.parse_args()
+
+    # Argument validation
+    if args.bare_metal:
+        if args.kernel:
+            parser.error("--bare-metal and --kernel are mutually exclusive")
+        if args.initrd:
+            parser.error("--bare-metal and --initrd are mutually exclusive")
+        if args.fast_forward:
+            parser.error("--fast-forward requires m5ops; not available in bare-metal mode")
+        if args.save_checkpoint:
+            parser.error("--save-checkpoint requires m5ops; not available in bare-metal mode")
+        if args.restore:
+            parser.error("--restore is not supported in bare-metal mode")
+    elif not args.kernel:
+        parser.error("--kernel is required (unless --bare-metal is specified)")
 
     # Force topology and CHI config for Delegato
     noc_config = os.path.join(
