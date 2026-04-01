@@ -67,8 +67,10 @@ class CustomMesh(SimpleTopology):
         cross_link_latency,
     ):
         # East->West, West->East, North->South, South->North
-        # XY routing weights
-        link_weights = [1, 1, 2, 2]
+        # Weight-based table routing biased to YX:
+        # vertical links get lower weight so packets move north/south first,
+        # then east/west on the target row.
+        link_weights = [2, 2, 1, 1]
 
         # East output to West input links
         for row in range(num_rows):
