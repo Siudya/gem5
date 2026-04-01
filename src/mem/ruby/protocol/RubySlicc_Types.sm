@@ -303,10 +303,10 @@ structure(DelegatoReuseTable, external = "yes") {
 // Delegato Predictor Table: per HN-F/LLC slice structure.
 // CA/PC/PO state machine for far-AMO placement decisions.
 structure(DelegatoPredictorTable, external = "yes") {
-    // Decide action for a far AMO. req_id=requester core index,
-    // has_owner=true if dir state has unique owner (RU).
+    // Decide action for a far AMO. req_id=requester, dir_case=directory
+    // state class (0=UC/UD, 1=RSC/RSD, 2=RU), owner_id=current owner.
     // Returns: 0=Centralize, 1=Delegate, 2=Migrate
-    int decideAction(Addr, NodeID, bool);
+    int decideAction(Addr, NodeID, int, NodeID);
     // Update based on reuse_bit feedback from Delegate SnpResp
     void updateReuseFeedback(Addr, bool);
     // Debug: get current state (-1=miss, 0=CA, 1=PC, 2=PO)

@@ -224,7 +224,9 @@ def create(args):
         cpu.l1d.delegato_rt_entries = 128
         cpu.l1d.delegato_rt_assoc = 2
 
-    cores_per_chiplet = max(1, args.num_cpus // 2)
+    # Single-die: all cores in one chiplet; dual-chiplet: split evenly
+    single_die = args.num_cpus <= 4
+    cores_per_chiplet = args.num_cpus if single_die else max(1, args.num_cpus // 2)
     hnf_idx = 0
     for hnf in system.ruby.hnf:
         for cntrl in hnf.getAllControllers():
@@ -438,8 +440,19 @@ def main():
         parser.error("--kernel is required (unless --bare-metal is specified)")
 
     # Force topology and CHI config for Delegato
+    # Single-die fast-test config for ≤4 cores; dual-chiplet 4×12 otherwise
+    if args.num_cpus <= 4:
+        noc_name = "delegato_single_2x4.py"
+        # Override cache/memory defaults for the smaller topology
+        args.num_l3caches = 4
+        args.num_dirs = 2
+        args.mem_channels = 2
+        print("Using single-die 2×4 mesh (fast-test config)")
+    else:
+        noc_name = "delegato_4x12.py"
+
     noc_config = os.path.join(
-        os.path.dirname(__file__), "..", "noc_config", "delegato_4x12.py"
+        os.path.dirname(__file__), "..", "noc_config", noc_name
     )
     args.topology = "CustomMesh"
     args.chi_config = noc_config
