@@ -91,6 +91,8 @@ class CHI_HNF(CHI_config.CHI_HNF):
     """LLC/directory slices distributed across col 1-4 and col 7-10 routers."""
     class NoC_Params(CHI_config.CHI_HNF.NoC_Params):
         router_list = _core_routers
+        # 32 HNFs: keep cacheline-granularity striping (64B -> PA[10:6]).
+        addr_map = CHI_config.AddrMap(intlv_low_bit=6, xor_low_bit=0)
 
 
 class CHI_MN(CHI_config.CHI_MN):
@@ -103,6 +105,9 @@ class CHI_SNF_MainMem(CHI_config.CHI_SNF_MainMem):
     """8 DDR5 channels: 4 on col 0 (Chiplet 0), 4 on col 11 (Chiplet 1)."""
     class NoC_Params(CHI_config.CHI_SNF_MainMem.NoC_Params):
         router_list = _mem_routers
+        # 8 SNFs: 256B striping with no XOR hash (PA[10:8]) keeps each die's
+        # HNFs on that die's local SNFs.
+        addr_map = CHI_config.AddrMap(intlv_low_bit=8, xor_low_bit=0)
 
 
 class CHI_SNF_BootMem(CHI_config.CHI_SNF_BootMem):

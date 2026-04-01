@@ -116,6 +116,70 @@ class NoC_Params:
     cross_link_latency = 0
 
 
+class AddrMap:
+    """
+    Optional interleaved address-map override for topology-defined HNF/SNF
+    nodes. If a field is left as None, the default mapping for that field is
+    preserved.
+    """
+
+    def __init__(self, intlv_low_bit=None, xor_low_bit=None):
+        self.intlv_low_bit = intlv_low_bit
+        self.xor_low_bit = xor_low_bit
+
+
+def resolve_addr_map(
+    addr_map, num_nodes, cache_line_size, default_xor_low_bit, owner
+):
+    if num_nodes < 1:
+        m5.fatal("%s addr_map requires at least one node", owner)
+    if num_nodes & (num_nodes - 1):
+        m5.fatal(
+            "%s addr_map requires a power-of-two node count, got %d",
+            owner, num_nodes
+        )
+
+    intlv_bits = int(math.log(num_nodes, 2))
+    cache_line_low_bit = int(math.log(cache_line_size, 2))
+    intlv_low_bit = cache_line_low_bit
+    xor_low_bit = default_xor_low_bit
+
+    if addr_map is not None:
+        if not isinstance(addr_map, AddrMap):
+            m5.fatal(
+                "%s addr_map must be a CHI_config.AddrMap instance",
+                owner
+            )
+        if addr_map.intlv_low_bit is not None:
+            intlv_low_bit = int(addr_map.intlv_low_bit)
+        if addr_map.xor_low_bit is not None:
+            xor_low_bit = int(addr_map.xor_low_bit)
+
+    if intlv_low_bit < 0:
+        m5.fatal("%s addr_map intlv_low_bit must be >= 0", owner)
+    if intlv_low_bit < cache_line_low_bit:
+        m5.fatal(
+            "%s addr_map intlv_low_bit (%d) must be >= cache line bit (%d)",
+            owner, intlv_low_bit, cache_line_low_bit
+        )
+
+    if xor_low_bit is None:
+        xor_low_bit = 0
+    if xor_low_bit < 0:
+        m5.fatal("%s addr_map xor_low_bit must be >= 0", owner)
+
+    intlv_high_bit = intlv_low_bit + intlv_bits - 1
+    xor_high_bit = xor_low_bit + intlv_bits - 1 if xor_low_bit == 0 else 0
+
+    return {
+        "intlv_low_bit": intlv_low_bit,
+        "intlv_bits": intlv_bits,
+        "intlv_high_bit": intlv_high_bit,
+        "xor_low_bit": xor_low_bit,
+        "xor_high_bit": xor_high_bit,
+    }
+
+
 class CHI_Node(SubSystem):
     """
     Base class with common functions for setting up Cache or Memory
@@ -629,27 +693,32 @@ class CHI_HNF(CHI_Node):
         """HNFs may also define the 'pairing' parameter to allow pairing"""
 
         pairing = None
+        addr_map = None
 
     _addr_ranges = {}
 
     @classmethod
-    def createAddrRanges(cls, sys_mem_ranges, cache_line_size, hnfs):
+    def createAddrRanges(cls, sys_mem_ranges, cache_line_size, hnfs, addr_map=None):
         # Create the HNFs interleaved addr ranges
-        block_size_bits = int(math.log(cache_line_size, 2))
-        llc_bits = int(math.log(len(hnfs), 2))
-        numa_bit = block_size_bits + llc_bits - 1
+        resolved_map = resolve_addr_map(
+            addr_map, len(hnfs), cache_line_size, 0, "HNF"
+        )
+        intlv_high_bit = resolved_map["intlv_high_bit"]
+        intlv_bits = resolved_map["intlv_bits"]
+        xor_high_bit = resolved_map["xor_high_bit"]
         for i, hnf in enumerate(hnfs):
             ranges = []
             for r in sys_mem_ranges:
                 addr_range = AddrRange(
                     r.start,
                     size=r.size(),
-                    intlvHighBit=numa_bit,
-                    intlvBits=llc_bits,
+                    intlvHighBit=intlv_high_bit,
+                    xorHighBit=xor_high_bit,
+                    intlvBits=intlv_bits,
                     intlvMatch=i,
                 )
                 ranges.append(addr_range)
-            cls._addr_ranges[hnf] = (ranges, numa_bit)
+            cls._addr_ranges[hnf] = (ranges, intlv_high_bit)
 
     @classmethod
     def getAddrRanges(cls, hnf_idx):
@@ -731,6 +800,9 @@ class CHI_SNF_Base(CHI_Node):
     """
     Creates CHI node controllers for the memory controllers
     """
+
+    class NoC_Params(CHI_Node.NoC_Params):
+        addr_map = None
 
     # The CHI controller can be a child of this object or another if
     # 'parent' if specified

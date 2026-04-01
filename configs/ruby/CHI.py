@@ -101,6 +101,11 @@ def create_system(
     CHI_SNF_BootMem = chi_defs.CHI_SNF_BootMem
     CHI_RNI_DMA = chi_defs.CHI_RNI_DMA
     CHI_RNI_IO = chi_defs.CHI_RNI_IO
+    resolve_addr_map = getattr(chi_defs, "resolve_addr_map", None)
+    if resolve_addr_map is None:
+        base_chi_config = getattr(chi_defs, "CHI_config", None)
+        if base_chi_config is not None:
+            resolve_addr_map = getattr(base_chi_config, "resolve_addr_map", None)
 
     class HNFCache(RubyCache):
         dataAccessLatency = 10
@@ -161,7 +166,10 @@ def create_system(
         sysranges.append(m.range)
 
     hnf_list = [i for i in range(options.num_l3caches)]
-    CHI_HNF.createAddrRanges(sysranges, system.cache_line_size.value, hnf_list)
+    hnf_addr_map = getattr(CHI_HNF.NoC_Params, "addr_map", None)
+    CHI_HNF.createAddrRanges(
+        sysranges, system.cache_line_size.value, hnf_list, hnf_addr_map
+    )
     ruby_system.hnf = [
         CHI_HNF(i, ruby_system, HNFCache, None)
         for i in range(options.num_l3caches)
@@ -177,6 +185,21 @@ def create_system(
     # Create the memory controllers
     # Notice we don't define a Directory_Controller type so we don't use
     # create_directories shared by other protocols.
+
+    snf_addr_map = getattr(CHI_SNF_MainMem.NoC_Params, "addr_map", None)
+    options.snf_addr_map = None
+    if snf_addr_map is not None:
+        if resolve_addr_map is None:
+            m5.fatal(
+                "CHI config module must expose resolve_addr_map directly or via CHI_config"
+            )
+        options.snf_addr_map = resolve_addr_map(
+            snf_addr_map,
+            options.num_dirs,
+            system.cache_line_size.value,
+            options.xor_low_bit,
+            "SNF",
+        )
 
     ruby_system.snf = [
         CHI_SNF_MainMem(ruby_system, None, None)

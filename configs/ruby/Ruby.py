@@ -132,7 +132,12 @@ def define_options(parser):
 
 
 def setup_memory_controllers(system, ruby, dir_cntrls, options):
-    if options.numa_high_bit:
+    snf_addr_map = getattr(options, "snf_addr_map", None)
+
+    if snf_addr_map and options.numa_high_bit:
+        fatal("Topology SNF addr_map cannot be combined with --numa-high-bit")
+
+    if options.numa_high_bit and not snf_addr_map:
         block_size_bits = (
             options.numa_high_bit + 1 - int(math.log(options.num_dirs, 2))
         )
@@ -146,7 +151,13 @@ def setup_memory_controllers(system, ruby, dir_cntrls, options):
     mem_ctrls = []
     crossbars = []
 
-    if options.numa_high_bit:
+    dir_bits = int(math.log(options.num_dirs, 2))
+    xor_low_bit = options.xor_low_bit
+
+    if snf_addr_map:
+        intlv_size = 2 ** (snf_addr_map["intlv_low_bit"])
+        xor_low_bit = snf_addr_map["xor_low_bit"]
+    elif options.numa_high_bit:
         dir_bits = int(math.log(options.num_dirs, 2))
         intlv_size = 2 ** (options.numa_high_bit - dir_bits + 1)
     else:
@@ -172,9 +183,9 @@ def setup_memory_controllers(system, ruby, dir_cntrls, options):
                 mem_type,
                 r,
                 index,
-                int(math.log(options.num_dirs, 2)),
+                dir_bits,
                 intlv_size,
-                options.xor_low_bit,
+                xor_low_bit,
             )
             if issubclass(mem_type, DRAMInterface):
                 mem_ctrl = m5.objects.MemCtrl(dram=dram_intf)
