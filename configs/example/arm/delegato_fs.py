@@ -36,8 +36,13 @@ Modes of operation:
                 Boot with TimingSimpleCPU, switch to target CPU on ROI start.
   Save ckpt:    gem5.opt delegato_fs.py ... --save-checkpoint
                 Boot with TimingSimpleCPU, save checkpoint on ROI start, exit.
+  KVM ROI ckpt: gem5.opt delegato_fs.py ... --cpu o3 --save-kvm-roi-checkpoint
+                Boot with ArmV8KvmCPU, switch to O3 at ROI start, immediately
+                save a cold-start ROI checkpoint, then exit.
   Restore:      gem5.opt delegato_fs.py ... --cpu o3 --restore <cpt_dir>
-                Restore from checkpoint, switch to target CPU, run ROI.
+                Restore from checkpoint. Timing ROI checkpoints switch to the
+                target CPU after restore; KVM ROI checkpoints resume ROI
+                directly.
   Bare-metal:   gem5.opt delegato_fs.py --bare-metal <elf> --cpu timing
                 Boot bare-metal ELF directly (no Linux kernel).  The ELF
                 must be linked at 0x80080000 (VExpress physical RAM + 512K).
@@ -50,6 +55,7 @@ These modes are incompatible with --bare-metal.
 """
 
 import argparse
+import json
 import math
 import os
 import sys
@@ -113,22 +119,162 @@ cpu_types = {
     "hpi": HPI.HPI,
     "o3": DelegatoO3CPU,
 }
+kvm_cpu_class = ObjectList.cpu_list.get("ArmV8KvmCPU") if devices.have_kvm else None
+
+CHECKPOINT_METADATA_NAME = "delegato_checkpoint.json"
+LATEST_CHECKPOINT_NAME = "delegato_latest_checkpoint.txt"
+TIMING_ROI_CHECKPOINT_KIND = "timing_roi_pre_switch"
+KVM_ROI_CHECKPOINT_KIND = "kvm_roi_post_switch"
+KVM_SIM_QUANTUM = "1ms"
+
+
+def _to_ticks(value):
+    """Convert a latency string to ticks."""
+
+    return m5.ticks.fromSeconds(m5.util.convert.anyToLatency(value))
+
+
+def _using_pdes(root):
+    """Determine whether the configuration uses multiple event queues."""
+
+    for obj in root.descendants():
+        if (
+            not m5.proxy.isproxy(obj.eventq_index)
+            and obj.eventq_index != root.eventq_index
+        ):
+            return True
+
+    return False
+
+
+def _resolve_restore_dir(path):
+    """Allow restoring from either a checkpoint dir or its outdir."""
+
+    if path is None:
+        return None
+
+    if os.path.isfile(os.path.join(path, "m5.cpt")):
+        return path
+
+    latest_path = os.path.join(path, LATEST_CHECKPOINT_NAME)
+    if os.path.isfile(latest_path):
+        with open(latest_path, "r", encoding="utf-8") as fh:
+            resolved = fh.read().strip()
+        if resolved:
+            return resolved
+
+    return path
+
+
+def _load_checkpoint_metadata(path):
+    """Load Delegato checkpoint sidecar metadata if present."""
+
+    if path is None:
+        return None
+
+    metadata_path = os.path.join(path, CHECKPOINT_METADATA_NAME)
+    if not os.path.isfile(metadata_path):
+        return None
+
+    with open(metadata_path, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _is_post_switch_checkpoint(metadata):
+    return bool(metadata) and metadata.get("kind") == KVM_ROI_CHECKPOINT_KIND
+
+
+def _restore_requires_switch(metadata):
+    if metadata is None:
+        return True
+    return metadata.get("restore_requires_switch", True)
+
+
+def _build_checkpoint_metadata(args, kind):
+    metadata = {
+        "kind": kind,
+        "target_cpu": args.cpu,
+        "num_cpus": args.num_cpus,
+        "cacheline_size": args.cacheline_size,
+        "restore_requires_switch": kind != KVM_ROI_CHECKPOINT_KIND,
+    }
+
+    if kind == KVM_ROI_CHECKPOINT_KIND:
+        metadata.update({
+            "boot_cpu": "kvm",
+            "policy_agnostic": True,
+            "ruby_cold_start": True,
+        })
+    elif kind == TIMING_ROI_CHECKPOINT_KIND:
+        metadata["boot_cpu"] = "timing"
+
+    return metadata
+
+
+def _write_checkpoint_metadata(cpt_dir, metadata):
+    metadata_path = os.path.join(cpt_dir, CHECKPOINT_METADATA_NAME)
+    with open(metadata_path, "w", encoding="utf-8") as fh:
+        json.dump(metadata, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+    latest_path = os.path.join(os.path.dirname(cpt_dir), LATEST_CHECKPOINT_NAME)
+    with open(latest_path, "w", encoding="utf-8") as fh:
+        fh.write(cpt_dir)
+        fh.write("\n")
+
+
+def _save_checkpoint(args, kind):
+    cpt_dir = os.path.join(m5.options.outdir, f"cpt.{m5.curTick()}")
+    m5.checkpoint(cpt_dir)
+    _write_checkpoint_metadata(cpt_dir, _build_checkpoint_metadata(args, kind))
+    return cpt_dir
+
+
+def _get_switch_cpu_list(system):
+    n = len(system.switch_cpus)
+    return [
+        (system.cpu_cluster[0].cpus[i], system.switch_cpus[i])
+        for i in range(n)
+    ]
+
+
+def _enable_kvm(system):
+    if not devices.have_kvm or kvm_cpu_class is None:
+        m5.fatal("ArmV8KvmCPU is not available in this gem5 build")
+
+    system.kvm_vm = KvmVM()
+    system.release = ArmDefaultRelease.for_kvm()
+
+    boot_cpus = system.cpu_cluster[0].cpus
+    if len(boot_cpus) > 1:
+        for idx, cpu in enumerate(boot_cpus):
+            for obj in cpu.descendants():
+                obj.eventq_index = 0
+            cpu.eventq_index = idx + 1
 
 
 # ─── System creation ─────────────────────────────────────────────────────
 
-def create(args):
+def create(args, restore_metadata=None):
     """Create and configure the system."""
 
+    restore_post_switch = _is_post_switch_checkpoint(restore_metadata)
+
     # Determine boot CPU vs target CPU
-    if args.fast_forward or args.save_checkpoint or args.restore:
+    if args.save_kvm_roi_checkpoint or restore_post_switch:
+        boot_cpu_class = kvm_cpu_class
+        target_cpu_class = cpu_types[args.cpu]
+    elif args.fast_forward or args.save_checkpoint or args.restore:
         boot_cpu_class = TimingSimpleCPU
         target_cpu_class = cpu_types[args.cpu]
     else:
         boot_cpu_class = cpu_types[args.cpu]
         target_cpu_class = None
 
-    mem_mode = boot_cpu_class.memory_mode()
+    if restore_post_switch and target_cpu_class is not None:
+        mem_mode = target_cpu_class.memory_mode()
+    else:
+        mem_mode = boot_cpu_class.memory_mode()
 
     # Bare-metal vs Linux workload
     if args.bare_metal:
@@ -157,6 +303,9 @@ def create(args):
             None,  # L2 handled by Ruby/CHI
         )
     ]
+    if restore_post_switch:
+        for cpu in system.cpu_cluster[0].cpus:
+            cpu.switched_out = True
 
     # Create switched-out target CPUs for fast-forward / restore
     # Follow gem5 standard pattern (configs/common/Simulation.py):
@@ -164,13 +313,16 @@ def create(args):
     #     via takeOverFrom() during m5.switchCpus()
     if target_cpu_class and target_cpu_class is not boot_cpu_class:
         switch_cpus = []
+        target_switched_out = not restore_post_switch
         for i, boot_cpu in enumerate(system.cpu_cluster[0].cpus):
             cpu = target_cpu_class(
-                switched_out=True,
+                switched_out=target_switched_out,
                 cpu_id=boot_cpu.cpu_id,
                 clk_domain=boot_cpu.clk_domain,
             )
             cpu.createThreads()
+            if not target_switched_out:
+                cpu.createInterruptController()
             switch_cpus.append(cpu)
         system.switch_cpus = switch_cpus
 
@@ -196,6 +348,9 @@ def create(args):
         system._dma_ports,
         system.realview.bootmem,
         cpus,
+    )
+    system._ruby_cpu_port_targets = (
+        system.switch_cpus if restore_post_switch else cpus
     )
 
     block_size_bits = int(math.log(args.cacheline_size, 2))
@@ -265,7 +420,8 @@ def create(args):
         system.workload.dtb_filename = os.path.join(
             m5.options.outdir, "system.dtb"
         )
-        system.generateDtb(system.workload.dtb_filename)
+        if not restore_post_switch:
+            system.generateDtb(system.workload.dtb_filename)
 
     if not args.bare_metal:
         # initrd support
@@ -286,7 +442,11 @@ def create(args):
             kernel_cmd.append("rw")
         if args.initrd:
             kernel_cmd.append("rdinit=/init")
-        if args.fast_forward or args.save_checkpoint:
+        if (
+            args.fast_forward
+            or args.save_checkpoint
+            or args.save_kvm_roi_checkpoint
+        ):
             kernel_cmd.append("gem5_m5ops=1")
 
         system.workload.command_line = " ".join(kernel_cmd)
@@ -296,31 +456,37 @@ def create(args):
 
 # ─── Simulation loop ─────────────────────────────────────────────────────
 
-def run(args, root):
+def run(args, root, switched=False):
     has_switch_cpus = hasattr(root.system, "switch_cpus")
-    switched = False
 
     while True:
         event = m5.simulate()
         exit_msg = event.getCause()
 
         if exit_msg == "checkpoint":
+            if args.save_kvm_roi_checkpoint:
+                if not has_switch_cpus or switched:
+                    m5.fatal("KVM ROI checkpoint flow requires a pending CPU switch")
+
+                system = root.system
+                switch_cpu_list = _get_switch_cpu_list(system)
+                print(f"Switching {len(switch_cpu_list)} CPUs to {args.cpu} @ tick {m5.curTick()}")
+                m5.switchCpus(system, switch_cpu_list)
+                switched = True
+                print("CPU switch complete, saving cold-start ROI checkpoint")
+                cpt_dir = _save_checkpoint(args, KVM_ROI_CHECKPOINT_KIND)
+                print(f"KVM ROI checkpoint saved: {cpt_dir}")
+                sys.exit(0)
+
             if args.save_checkpoint:
-                cpt_dir = os.path.join(
-                    m5.options.outdir, f"cpt.{m5.curTick()}"
-                )
-                m5.checkpoint(cpt_dir)
+                cpt_dir = _save_checkpoint(args, TIMING_ROI_CHECKPOINT_KIND)
                 print(f"Checkpoint saved: {cpt_dir}")
                 sys.exit(0)
 
             elif has_switch_cpus and not switched:
                 system = root.system
-                n = len(system.switch_cpus)
-                switch_cpu_list = [
-                    (system.cpu_cluster[0].cpus[i], system.switch_cpus[i])
-                    for i in range(n)
-                ]
-                print(f"Switching {n} CPUs to {args.cpu} @ tick {m5.curTick()}")
+                switch_cpu_list = _get_switch_cpu_list(system)
+                print(f"Switching {len(switch_cpu_list)} CPUs to {args.cpu} @ tick {m5.curTick()}")
                 m5.switchCpus(system, switch_cpu_list)
                 switched = True
                 print("CPU switch complete, ROI begins")
@@ -377,13 +543,19 @@ def main():
     # Fast-forward / Checkpoint
     parser.add_argument("--fast-forward", action="store_true",
                         help="Boot with TimingSimpleCPU, switch to --cpu "
-                             "on ROI start (requires m5ops in guest)")
+                              "on ROI start (requires m5ops in guest)")
     parser.add_argument("--save-checkpoint", action="store_true",
                         help="Boot with TimingSimpleCPU, save checkpoint "
-                             "on ROI start and exit")
+                              "on ROI start and exit")
+    parser.add_argument("--save-kvm-roi-checkpoint", action="store_true",
+                        help="Boot with ArmV8KvmCPU, switch to --cpu at ROI "
+                             "start, immediately save a cold-start ROI checkpoint, "
+                             "and exit")
     parser.add_argument("--restore", type=str, default=None,
-                        help="Restore from checkpoint directory and switch "
-                             "to --cpu type")
+                        help="Restore from a checkpoint directory (or outdir "
+                             "with delegato_latest_checkpoint.txt). Timing ROI "
+                             "checkpoints switch to --cpu after restore; KVM ROI "
+                             "checkpoints resume ROI directly")
 
     # Memory
     parser.add_argument("--mem-type", default="DDR5_4400_4x8",
@@ -423,6 +595,8 @@ def main():
                              "unique-near (baseline), all-far")
 
     args = parser.parse_args()
+    args.restore = _resolve_restore_dir(args.restore)
+    restore_metadata = _load_checkpoint_metadata(args.restore)
 
     # Argument validation
     if args.bare_metal:
@@ -434,10 +608,37 @@ def main():
             parser.error("--fast-forward requires m5ops; not available in bare-metal mode")
         if args.save_checkpoint:
             parser.error("--save-checkpoint requires m5ops; not available in bare-metal mode")
+        if args.save_kvm_roi_checkpoint:
+            parser.error("--save-kvm-roi-checkpoint is not available in bare-metal mode")
         if args.restore:
             parser.error("--restore is not supported in bare-metal mode")
     elif not args.kernel:
         parser.error("--kernel is required (unless --bare-metal is specified)")
+
+    if args.save_kvm_roi_checkpoint and args.cpu != "o3":
+        parser.error("--save-kvm-roi-checkpoint currently requires --cpu o3")
+    if args.save_kvm_roi_checkpoint and not devices.have_kvm:
+        parser.error("ArmV8KvmCPU is not available in this gem5 build")
+
+    if args.restore:
+        if not os.path.isfile(os.path.join(args.restore, "m5.cpt")):
+            parser.error(f"Invalid checkpoint directory: {args.restore}")
+
+        if _is_post_switch_checkpoint(restore_metadata) and not devices.have_kvm:
+            parser.error("ArmV8KvmCPU is not available in this gem5 build")
+
+        saved_num_cpus = None if restore_metadata is None else restore_metadata.get("num_cpus")
+        if saved_num_cpus is not None and args.num_cpus != saved_num_cpus:
+            parser.error(
+                f"--restore checkpoint expects --num-cpus {saved_num_cpus}, got {args.num_cpus}"
+            )
+
+        if _is_post_switch_checkpoint(restore_metadata):
+            saved_cpu = restore_metadata.get("target_cpu")
+            if saved_cpu and args.cpu != saved_cpu:
+                parser.error(
+                    f"--restore checkpoint expects --cpu {saved_cpu}, got {args.cpu}"
+                )
 
     # Force topology and CHI config for Delegato
     # Single-die fast-test config for ≤4 cores; dual-chiplet 4×12 otherwise
@@ -460,25 +661,29 @@ def main():
     args.ruby_clock = "2GHz"
 
     root = Root(full_system=True)
-    root.system = create(args)
+    root.system = create(args, restore_metadata)
+    if args.save_kvm_roi_checkpoint or _is_post_switch_checkpoint(restore_metadata):
+        _enable_kvm(root.system)
+        if _using_pdes(root):
+            root.sim_quantum = _to_ticks(KVM_SIM_QUANTUM)
 
+    switched = False
     if args.restore:
-        # Restore from checkpoint, then switch CPUs immediately
         m5.instantiate(args.restore)
         system = root.system
-        if hasattr(system, "switch_cpus"):
-            n = len(system.switch_cpus)
-            switch_cpu_list = [
-                (system.cpu_cluster[0].cpus[i], system.switch_cpus[i])
-                for i in range(n)
-            ]
-            print(f"Restored, switching {n} CPUs to {args.cpu}")
+        if _restore_requires_switch(restore_metadata) and hasattr(system, "switch_cpus"):
+            switch_cpu_list = _get_switch_cpu_list(system)
+            print(f"Restored, switching {len(switch_cpu_list)} CPUs to {args.cpu}")
             m5.switchCpus(system, switch_cpu_list)
             print("CPU switch complete, resuming ROI")
+            switched = True
+        elif _is_post_switch_checkpoint(restore_metadata):
+            print(f"Restored KVM ROI checkpoint, resuming ROI on {args.cpu}")
+            switched = True
     else:
         m5.instantiate()
 
-    run(args, root)
+    run(args, root, switched=switched)
 
 
 if __name__ == "__m5_main__":

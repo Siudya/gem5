@@ -512,9 +512,21 @@ class ArmRubySystem(BaseSimpleSystem):
 
         self.realview.attachIO(self.iobus, dma_ports=self._dma_ports)
 
-        for cluster in self._clusters:
-            for i, cpu in enumerate(cluster.cpus):
-                self.ruby._cpu_ports[i].connectCpuPorts(cpu)
+        ruby_cpu_targets = getattr(self, "_ruby_cpu_port_targets", None)
+        if ruby_cpu_targets is None:
+            ruby_cpu_targets = []
+            for cluster in self._clusters:
+                ruby_cpu_targets.extend(cluster.cpus)
+
+        if len(ruby_cpu_targets) != len(self.ruby._cpu_ports):
+            m5.fatal(
+                "Ruby CPU port target count (%d) does not match ruby._cpu_ports (%d)",
+                len(ruby_cpu_targets),
+                len(self.ruby._cpu_ports),
+            )
+
+        for i, cpu in enumerate(ruby_cpu_targets):
+            self.ruby._cpu_ports[i].connectCpuPorts(cpu)
 
     def attach_pci(self, dev):
         self.realview.attachPciDevice(
