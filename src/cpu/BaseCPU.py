@@ -273,12 +273,16 @@ class BaseCPU(ClockedObject):
 
         # Generate cpu nodes
         for i in range(int(self.numThreads)):
-            reg = (int(self.socket_id) << 8) + int(self.cpu_id) + i
+            system = self.system.unproxy(self)
+            if getattr(system, "kvm_affinity_fold_16", False):
+                reg = (int(self.socket_id) << 8) + ((int(self.cpu_id) & 0xF) + i)
+            else:
+                reg = (int(self.socket_id) << 8) + int(self.cpu_id) + i
             node = FdtNode(f"cpu@{reg:x}")
             node.append(FdtPropertyStrings("device_type", "cpu"))
             node.appendCompatible(["gem5,arm-cpu"])
             node.append(FdtPropertyWords("reg", state.CPUAddrCells(reg)))
-            platform, found = self.system.unproxy(self).find_any(Platform)
+            platform, found = system.find_any(Platform)
             if found:
                 platform.annotateCpuDeviceNode(node, state)
             else:

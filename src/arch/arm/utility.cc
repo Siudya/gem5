@@ -215,6 +215,9 @@ getAff1(ArmSystem *arm_sys, ThreadContext *tc)
 static RegVal
 getAff0(ArmSystem *arm_sys, ThreadContext *tc)
 {
+    if (!arm_sys->multiThread && arm_sys->kvmAffinityFold16) {
+        return tc->cpuId() & 0xf;
+    }
     return arm_sys->multiThread ? tc->threadId() : tc->cpuId();
 }
 

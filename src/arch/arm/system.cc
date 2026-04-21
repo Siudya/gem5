@@ -81,7 +81,8 @@ ArmSystem::ArmSystem(const Params &p)
       _smeVL(p.sme_vl),
       semihosting(p.semihosting),
       release(p.release),
-      multiProc(p.multi_proc)
+      multiProc(p.multi_proc),
+      kvmAffinityFold16(p.kvm_affinity_fold_16)
 {
     if (p.auto_reset_addr) {
         _resetAddr = workload->getEntry();

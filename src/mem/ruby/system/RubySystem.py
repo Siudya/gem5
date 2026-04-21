@@ -56,6 +56,10 @@ class RubySystem(ClockedObject):
         "Use phys_mem as the functional \
         store and only use ruby for timing.",
     )
+    skip_warmup_restore = Param.Bool(
+        False,
+        "Skip Ruby cache-trace warmup during checkpoint restore",
+    )
 
     # Profiler related configuration variables
     hot_lines = Param.Bool(False, "")

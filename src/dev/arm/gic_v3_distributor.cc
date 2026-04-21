@@ -1197,7 +1197,8 @@ Gicv3Distributor::copy(Gicv3Registers *from, Gicv3Registers *to)
     gic->copyDistRange(from, to, GICD_ISPENDR.start(), size);
     gic->copyDistRange(from, to, GICD_ISACTIVER.start(), size);
     gic->copyDistRange(from, to, GICD_IPRIORITYR.start(), size);
-    gic->copyDistRange(from, to, GICD_ITARGETSR.start(), size);
+    // GICv3 keeps affinity routing always enabled; legacy ITARGETSR is
+    // RAZ/WI and should not participate in cold-boot state migration.
     gic->copyDistRange(from, to, GICD_ICFGR.start(), size);
     gic->copyDistRange(from, to, GICD_IGRPMODR.start(), size);
     gic->copyDistRange(from, to, GICD_NSACR.start(), size);

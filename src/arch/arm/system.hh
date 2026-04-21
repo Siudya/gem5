@@ -152,6 +152,7 @@ class ArmSystem : public System
 
     /** true if this a multiprocessor system */
     bool multiProc;
+    bool kvmAffinityFold16;
 
     const ArmRelease* releaseFS() const { return release; }
 

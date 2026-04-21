@@ -316,6 +316,10 @@ class ArmSystem(System):
     release = Param.ArmRelease(ArmDefaultRelease(), "Arm Release")
 
     multi_proc = Param.Bool(True, "Multiprocessor system?")
+    kvm_affinity_fold_16 = Param.Bool(
+        False,
+        "Fold CPU IDs into 16-way MPIDR Aff0 slots for KVM/GICv3 boot topologies",
+    )
     gic_cpu_addr = Param.Addr(0, "Addres of the GIC CPU interface")
     reset_addr = Param.Addr(0x0, "Reset address (ARMv8)")
     auto_reset_addr = Param.Bool(

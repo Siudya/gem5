@@ -277,6 +277,13 @@ KvmKernelGicV3::writeCpu(const ArmISA::Affinity &aff,
                          ArmISA::MiscRegIndex misc_reg,
                          RegVal data)
 {
+    if (misc_reg == ArmISA::MISCREG_ICC_CTLR_EL1) {
+        // Host VGIC implementations may reject cold-boot writes to
+        // host-defined RO/RES0 bits in ICC_CTLR_EL1. Keep the kernel VGIC's
+        // initialized value instead of failing the entire KVM boot.
+        return;
+    }
+
     std::optional<ArmISA::MiscRegNum64> sys_reg =
         ArmISA::encodeAArch64SysReg(misc_reg);
     panic_if(!sys_reg.has_value(), "Invalid system register");

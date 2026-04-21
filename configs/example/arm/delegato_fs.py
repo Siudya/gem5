@@ -126,6 +126,7 @@ LATEST_CHECKPOINT_NAME = "delegato_latest_checkpoint.txt"
 TIMING_ROI_CHECKPOINT_KIND = "timing_roi_pre_switch"
 KVM_ROI_CHECKPOINT_KIND = "kvm_roi_post_switch"
 KVM_SIM_QUANTUM = "1ms"
+KVM_AFFINITY_CLUSTER_SIZE = 16
 
 
 def _to_ticks(value):
@@ -181,7 +182,11 @@ def _load_checkpoint_metadata(path):
 
 
 def _is_post_switch_checkpoint(metadata):
-    return bool(metadata) and metadata.get("kind") == KVM_ROI_CHECKPOINT_KIND
+    return (
+        bool(metadata)
+        and metadata.get("kind") == KVM_ROI_CHECKPOINT_KIND
+        and not metadata.get("restore_requires_switch", True)
+    )
 
 
 def _restore_requires_switch(metadata):
@@ -196,7 +201,7 @@ def _build_checkpoint_metadata(args, kind):
         "target_cpu": args.cpu,
         "num_cpus": args.num_cpus,
         "cacheline_size": args.cacheline_size,
-        "restore_requires_switch": kind != KVM_ROI_CHECKPOINT_KIND,
+        "restore_requires_switch": True,
     }
 
     if kind == KVM_ROI_CHECKPOINT_KIND:
@@ -231,22 +236,49 @@ def _save_checkpoint(args, kind):
 
 
 def _get_switch_cpu_list(system):
+    boot_cpus = _get_boot_cpus(system)
     n = len(system.switch_cpus)
     return [
-        (system.cpu_cluster[0].cpus[i], system.switch_cpus[i])
+        (boot_cpus[i], system.switch_cpus[i])
         for i in range(n)
     ]
 
 
-def _enable_kvm(system):
+def _get_boot_cpus(system):
+    return [
+        cpu
+        for cluster in system.cpu_cluster
+        for cpu in cluster.cpus
+    ]
+
+
+def _enable_kvm(system, use_pdes=True):
     if not devices.have_kvm or kvm_cpu_class is None:
         m5.fatal("ArmV8KvmCPU is not available in this gem5 build")
 
     system.kvm_vm = KvmVM()
     system.release = ArmDefaultRelease.for_kvm()
 
-    boot_cpus = system.cpu_cluster[0].cpus
-    if len(boot_cpus) > 1:
+    boot_cpus = _get_boot_cpus(system)
+
+    # Disable perf_event usage when the host restricts it
+    # (perf_event_paranoid > 1).  KVM still works but without
+    # hardware perf counters.
+    try:
+        with open("/proc/sys/kernel/perf_event_paranoid") as f:
+            paranoid = int(f.read().strip())
+    except (OSError, ValueError):
+        paranoid = 0
+    if paranoid > 1:
+        for cpu in boot_cpus:
+            cpu.usePerf = False
+
+    # PDES: assign each boot CPU (and its KVM-side descendants) to its
+    # own event queue so multiple vCPUs can run in parallel.  Devices
+    # like the GIC remain on queue 0, and KVM in-kernel interrupt
+    # delivery handles cross-CPU IPIs without going through gem5
+    # event scheduling.
+    if use_pdes and len(boot_cpus) > 1:
         for idx, cpu in enumerate(boot_cpus):
             for obj in cpu.descendants():
                 obj.eventq_index = 0
@@ -259,9 +291,31 @@ def create(args, restore_metadata=None):
     """Create and configure the system."""
 
     restore_post_switch = _is_post_switch_checkpoint(restore_metadata)
+    restore_with_kvm_boot = bool(restore_metadata) and restore_metadata.get("boot_cpu") == "kvm"
+    use_folded_kvm_affinity = False
+
+    # Use VExpress_GEM5_Foundation (GICv3) for any mode that boots with
+    # KVM.  GICv3-only hosts cannot create a KVM GICv2 kernel device
+    # (VExpress_GEM5_V1), but MuxingKvmGicV3 works natively.
+    use_kvm_boot = (
+        args.cpu == "kvm"
+        or args.save_kvm_roi_checkpoint
+        or restore_with_kvm_boot
+    )
+    if use_kvm_boot and args.num_cpus > KVM_AFFINITY_CLUSTER_SIZE:
+        use_folded_kvm_affinity = True
+    platform = VExpress_GEM5_Foundation() if use_kvm_boot else None
+    if platform is not None:
+        # KVM requires it_lines to be a multiple of 32; the Gicv3
+        # default (1020) is not.  Use 512 to match VExpress_GEM5_V1.
+        platform.gic.it_lines = 512
+        # Foundation's Pl111 CLCD has a DMA port that the Ruby/CHI
+        # connect() flow cannot wire up.  Replace it with a no-op fake
+        # since we don't need a display controller.
+        platform.clcd = AmbaFake(pio_addr=0x1C1F0000, ignore_access=True)
 
     # Determine boot CPU vs target CPU
-    if args.save_kvm_roi_checkpoint or restore_post_switch:
+    if args.save_kvm_roi_checkpoint or restore_with_kvm_boot:
         boot_cpu_class = kvm_cpu_class
         target_cpu_class = cpu_types[args.cpu]
     elif args.fast_forward or args.save_checkpoint or args.restore:
@@ -281,20 +335,31 @@ def create(args, restore_metadata=None):
         system = devices.ArmRubySystem(
             args.mem_size,
             mem_mode=mem_mode,
+            kvm_affinity_fold_16=use_folded_kvm_affinity,
             workload=ArmFsWorkload(object_file=args.bare_metal),
         )
     else:
         system = devices.ArmRubySystem(
             args.mem_size,
             mem_mode=mem_mode,
+            kvm_affinity_fold_16=use_folded_kvm_affinity,
             workload=ArmFsLinux(object_file=args.kernel),
         )
 
     # CPU cluster (boot CPUs)
+    boot_cluster_sizes = [args.num_cpus]
+    if use_kvm_boot and args.num_cpus > KVM_AFFINITY_CLUSTER_SIZE:
+        boot_cluster_sizes = []
+        remaining_cpus = args.num_cpus
+        while remaining_cpus > 0:
+            cluster_cpus = min(KVM_AFFINITY_CLUSTER_SIZE, remaining_cpus)
+            boot_cluster_sizes.append(cluster_cpus)
+            remaining_cpus -= cluster_cpus
+
     system.cpu_cluster = [
         devices.ArmCpuCluster(
             system,
-            args.num_cpus,
+            cluster_cpus,
             args.cpu_freq,
             "1.0V",
             boot_cpu_class,
@@ -302,11 +367,8 @@ def create(args, restore_metadata=None):
             None,  # L1D handled by Ruby/CHI
             None,  # L2 handled by Ruby/CHI
         )
+        for cluster_cpus in boot_cluster_sizes
     ]
-    if restore_post_switch:
-        for cpu in system.cpu_cluster[0].cpus:
-            cpu.switched_out = True
-
     # Create switched-out target CPUs for fast-forward / restore
     # Follow gem5 standard pattern (configs/common/Simulation.py):
     #   - Do NOT call createInterruptController() — interrupts transfer
@@ -314,10 +376,11 @@ def create(args, restore_metadata=None):
     if target_cpu_class and target_cpu_class is not boot_cpu_class:
         switch_cpus = []
         target_switched_out = not restore_post_switch
-        for i, boot_cpu in enumerate(system.cpu_cluster[0].cpus):
+        for i, boot_cpu in enumerate(_get_boot_cpus(system)):
             cpu = target_cpu_class(
                 switched_out=target_switched_out,
                 cpu_id=boot_cpu.cpu_id,
+                socket_id=boot_cpu.socket_id,
                 clk_domain=boot_cpu.clk_domain,
             )
             cpu.createThreads()
@@ -349,6 +412,8 @@ def create(args, restore_metadata=None):
         system.realview.bootmem,
         cpus,
     )
+    if restore_metadata and restore_metadata.get("ruby_cold_start"):
+        system.ruby.skip_warmup_restore = True
     system._ruby_cpu_port_targets = (
         system.switch_cpus if restore_post_switch else cpus
     )
@@ -468,12 +533,6 @@ def run(args, root, switched=False):
                 if not has_switch_cpus or switched:
                     m5.fatal("KVM ROI checkpoint flow requires a pending CPU switch")
 
-                system = root.system
-                switch_cpu_list = _get_switch_cpu_list(system)
-                print(f"Switching {len(switch_cpu_list)} CPUs to {args.cpu} @ tick {m5.curTick()}")
-                m5.switchCpus(system, switch_cpu_list)
-                switched = True
-                print("CPU switch complete, saving cold-start ROI checkpoint")
                 cpt_dir = _save_checkpoint(args, KVM_ROI_CHECKPOINT_KIND)
                 print(f"KVM ROI checkpoint saved: {cpt_dir}")
                 sys.exit(0)
@@ -662,16 +721,28 @@ def main():
 
     root = Root(full_system=True)
     root.system = create(args, restore_metadata)
-    if args.save_kvm_roi_checkpoint or _is_post_switch_checkpoint(restore_metadata):
-        _enable_kvm(root.system)
-        if _using_pdes(root):
-            root.sim_quantum = _to_ticks(KVM_SIM_QUANTUM)
+    if args.cpu == "kvm" or args.save_kvm_roi_checkpoint or (
+        restore_metadata and restore_metadata.get("boot_cpu") == "kvm"
+    ):
+        enable_kvm_pdes = not (
+            args.restore and _restore_requires_switch(restore_metadata)
+        )
+        _enable_kvm(root.system, use_pdes=enable_kvm_pdes)
+        if enable_kvm_pdes and _using_pdes(root):
+            root.sim_quantum = int(1e9)  # 1ms at default 1THz tick rate
 
     switched = False
     if args.restore:
         m5.instantiate(args.restore)
         system = root.system
         if _restore_requires_switch(restore_metadata) and hasattr(system, "switch_cpus"):
+            startup_event = m5.simulate(0)
+            if startup_event.getCause() != "simulate() limit reached":
+                m5.fatal(
+                    "Unexpected restore startup event before CPU switch: "
+                    f"{startup_event.getCause()}"
+                )
+            m5.setMaxTick(m5.MaxTick)
             switch_cpu_list = _get_switch_cpu_list(system)
             print(f"Restored, switching {len(switch_cpu_list)} CPUs to {args.cpu}")
             m5.switchCpus(system, switch_cpu_list)
