@@ -112,8 +112,8 @@ cpu_types = {
 }
 kvm_cpu_class = ObjectList.cpu_list.get("ArmV8KvmCPU") if devices.have_kvm else None
 
-CHECKPOINT_METADATA_NAME = "delegato_checkpoint.json"
-LATEST_CHECKPOINT_NAME = "delegato_latest_checkpoint.txt"
+CHECKPOINT_METADATA_NAME = "checkpoint_metadata.json"
+LATEST_CHECKPOINT_NAME = "latest_checkpoint.txt"
 KVM_ROI_CHECKPOINT_KIND = "kvm_roi_post_switch"
 KVM_SIM_QUANTUM = "1ms"
 KVM_AFFINITY_CLUSTER_SIZE = 16
@@ -158,7 +158,7 @@ def _resolve_restore_dir(path):
 
 
 def _load_checkpoint_metadata(path):
-    """Load Delegato checkpoint sidecar metadata if present."""
+    """Load checkpoint sidecar metadata if present."""
 
     if path is None:
         return None
@@ -270,11 +270,14 @@ def create(args, restore_metadata=None):
     use_folded_kvm_affinity = False
 
     # Use VExpress_GEM5_Foundation (GICv3) for any mode that boots with
-    # KVM.  GICv3-only hosts cannot create a KVM GICv2 kernel device
-    # (VExpress_GEM5_V1), but MuxingKvmGicV3 works natively.
+    # KVM or restores a KVM-generated checkpoint. GICv3-only hosts cannot
+    # create a KVM GICv2 kernel device (VExpress_GEM5_V1), but
+    # MuxingKvmGicV3 works natively and restore must recreate the same
+    # platform/GIC object graph that was serialized into the checkpoint.
     use_kvm_boot = (
         args.cpu == "kvm"
         or args.save_kvm_roi_checkpoint
+        or args.restore
     )
     if use_kvm_boot and args.num_cpus > KVM_AFFINITY_CLUSTER_SIZE:
         use_folded_kvm_affinity = True
@@ -542,16 +545,16 @@ def main():
                         help="CPU model (default: minor)")
     parser.add_argument("--cpu-freq", type=str, default="3GHz",
                         help="CPU frequency (default: 3GHz)")
-    parser.add_argument("-n", "--num-cpus", type=int, default=32,
-                        help="Number of CPUs (default: 32)")
+    parser.add_argument("-n", "--num-cpus", type=int, default=16,
+                        help="Number of CPUs: 4, 16, or 32 (default: 16)")
 
     parser.add_argument("--save-kvm-roi-checkpoint", action="store_true",
                         help="Boot with ArmV8KvmCPU, switch to --cpu at ROI "
                              "start, immediately save a cold-start ROI checkpoint, "
                              "and exit")
     parser.add_argument("--restore", type=str, default=None,
-                        help="Restore directly from a KVM ROI checkpoint "
-                             "directory (or outdir with delegato_latest_checkpoint.txt)")
+                         help="Restore directly from a KVM ROI checkpoint "
+                              "directory (or outdir with latest_checkpoint.txt)")
 
     # Memory
     parser.add_argument("--mem-type", default="DDR5_4400_4x8",
@@ -641,16 +644,28 @@ def main():
             )
 
     # Force topology and CHI config for Delegato
-    # Single-die fast-test config for ≤4 cores; dual-chiplet 4×12 otherwise
-    if args.num_cpus <= 4:
+    # Explicit dispatch: 4 => 2x4, 16 => 4x8, 32 => 4x12
+    if args.num_cpus not in (4, 16, 32):
+        parser.error("--num-cpus only supports 4, 16, or 32")
+    
+    if args.num_cpus == 4:
         noc_name = "delegato_single_2x4.py"
-        # Override cache/memory defaults for the smaller topology
         args.num_l3caches = 4
         args.num_dirs = 2
         args.mem_channels = 2
-        print("Using single-die 2×4 mesh (fast-test config)")
-    else:
+        print("Using single-die 2x4 mesh (4-core fast-test config)")
+    elif args.num_cpus == 16:
+        noc_name = "delegato_4x8.py"
+        args.num_l3caches = 16
+        args.num_dirs = 8
+        args.mem_channels = 8
+        print("Using dual-chiplet 4x8 mesh (16-core default config)")
+    else:  # args.num_cpus == 32
         noc_name = "delegato_4x12.py"
+        args.num_l3caches = 32
+        args.num_dirs = 8
+        args.mem_channels = 8
+        print("Using dual-chiplet 4x12 mesh (32-core full config)")
 
     noc_config = os.path.join(
         os.path.dirname(__file__), "..", "noc_config", noc_name
