@@ -111,6 +111,8 @@ cpu_types = {
     "o3": DelegatoO3CPU,
 }
 kvm_cpu_class = ObjectList.cpu_list.get("ArmV8KvmCPU") if devices.have_kvm else None
+if kvm_cpu_class is not None:
+    cpu_types["kvm"] = kvm_cpu_class
 
 CHECKPOINT_METADATA_NAME = "checkpoint_metadata.json"
 LATEST_CHECKPOINT_NAME = "latest_checkpoint.txt"
