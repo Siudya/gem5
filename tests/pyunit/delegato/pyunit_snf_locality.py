@@ -45,24 +45,40 @@ def sample_addr(hnf_idx, hnf_low_bit):
     return hnf_idx << hnf_low_bit
 
 
+def router_to_chip(router_id, num_cols):
+    """
+    Map a router ID to chip ID based on mesh column.
+    
+    In a 4×N mesh with dual chiplets:
+    - Left half columns (0 to N/2-1) are chip 0
+    - Right half columns (N/2 to N-1) are chip 1
+    """
+    col = router_id % num_cols
+    return 0 if col < num_cols // 2 else 1
+
+
 class DelegatoSnfLocalityTest(unittest.TestCase):
     def assert_same_chip_locality(self, topology, hnf_count, snf_count):
         hnf_low_bit = topology.CHI_HNF.NoC_Params.addr_map.intlv_low_bit
         snf_low_bit = topology.CHI_SNF_MainMem.NoC_Params.addr_map.intlv_low_bit
-        hnfs_per_chip = hnf_count // 2
-        snfs_per_chip = snf_count // 2
+        hnf_router_list = topology.CHI_HNF.NoC_Params.router_list
+        snf_router_list = topology.CHI_SNF_MainMem.NoC_Params.router_list
+        num_cols = topology.NoC_Params.num_cols
 
         for hnf_idx in range(hnf_count):
             addr = sample_addr(hnf_idx, hnf_low_bit)
-            hnf_chip = hnf_idx // hnfs_per_chip
+            hnf_router = hnf_router_list[hnf_idx]
+            hnf_chip = router_to_chip(hnf_router, num_cols)
             snf_idx = selector(addr, snf_low_bit, snf_count)
-            snf_chip = snf_idx // snfs_per_chip
+            snf_router = snf_router_list[snf_idx]
+            snf_chip = router_to_chip(snf_router, num_cols)
             self.assertEqual(
                 hnf_chip,
                 snf_chip,
                 (
-                    f"address 0x{addr:x} maps HNF {hnf_idx} on chip {hnf_chip} "
-                    f"to SNF {snf_idx} on chip {snf_chip}"
+                    f"address 0x{addr:x} maps HNF {hnf_idx} (router {hnf_router}) "
+                    f"on chip {hnf_chip} to SNF {snf_idx} (router {snf_router}) "
+                    f"on chip {snf_chip}"
                 ),
             )
 

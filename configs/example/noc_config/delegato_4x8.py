@@ -72,6 +72,21 @@ _core_routers = [
     25, 26, 29, 30,
 ]
 
+# HNF routers grouped by chip to align with SNF locality (PA[9:7]).
+# Chiplet 0 HNFs first (col 1-2), then Chiplet 1 HNFs (col 5-6).
+_hnf_routers = [
+    # Chiplet 0: col 1-2, rows 0-3
+    1, 2,
+    9, 10,
+    17, 18,
+    25, 26,
+    # Chiplet 1: col 5-6, rows 0-3
+    5, 6,
+    13, 14,
+    21, 22,
+    29, 30,
+]
+
 # Memory columns: col 0 (Chiplet 0) and col 7 (Chiplet 1)
 _mem_routers = [
     0, 8, 16, 24,    # Chiplet 0
@@ -88,7 +103,7 @@ class CHI_RNF(CHI_config.CHI_RNF):
 class CHI_HNF(CHI_config.CHI_HNF):
     """LLC/directory slices distributed across col 1-2 and col 5-6 routers."""
     class NoC_Params(CHI_config.CHI_HNF.NoC_Params):
-        router_list = _core_routers
+        router_list = _hnf_routers
         # 16 HNFs: keep cacheline-granularity striping (64B -> PA[9:6]).
         addr_map = CHI_config.AddrMap(intlv_low_bit=6, xor_low_bit=0)
 
