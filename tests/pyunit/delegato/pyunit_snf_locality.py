@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""
+Unit tests for HNF-to-SNF same-chip locality in Delegato topologies.
+
+Note: This module requires gem5's pyunit test harness to run, as topology
+configuration modules depend on gem5's m5 library. Do not run standalone.
+"""
 
 import importlib.util
 import math
@@ -28,6 +34,14 @@ def selector(addr, intlv_low_bit, num_nodes):
 
 
 def sample_addr(hnf_idx, hnf_low_bit):
+    """
+    Generate one sample address for a given HNF slice.
+
+    Returns the minimal address mapping to the specified HNF. One address per
+    HNF is sufficient because interleaving is deterministic: any two addresses
+    mapping to the same HNF slice will yield the same SNF by the selector
+    function, so checking one address validates the entire slice mapping.
+    """
     return hnf_idx << hnf_low_bit
 
 
