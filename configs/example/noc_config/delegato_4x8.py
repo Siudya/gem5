@@ -103,9 +103,9 @@ class CHI_SNF_MainMem(CHI_config.CHI_SNF_MainMem):
     """8 DDR5 channels: 4 on col 0 (Chiplet 0), 4 on col 7 (Chiplet 1)."""
     class NoC_Params(CHI_config.CHI_SNF_MainMem.NoC_Params):
         router_list = _mem_routers
-        # 8 SNFs: 256B striping with no XOR hash (PA[10:8]) keeps each die's
-        # HNFs on that die's local SNFs.
-        addr_map = CHI_config.AddrMap(intlv_low_bit=8, xor_low_bit=0)
+        # 8 SNFs: 128B striping with no XOR hash (PA[9:7]) aligns SNF selector
+        # with the 16-HNF chip bit (PA[9]), keeping HNF requests on local SNFs.
+        addr_map = CHI_config.AddrMap(intlv_low_bit=7, xor_low_bit=0)
 
 
 class CHI_SNF_BootMem(CHI_config.CHI_SNF_BootMem):
