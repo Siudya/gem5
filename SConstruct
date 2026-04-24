@@ -517,6 +517,19 @@ def config_embedded_python(env):
 
     env.Prepend(CPPPATH=Dir('ext/pybind11/include/'))
 
+    # conda dylib rpath fix on macOS: SIP strips DYLD_LIBRARY_PATH;
+    # conftest binaries need embedded rpath to find conda libs at runtime.
+    if sys.platform == 'darwin':
+        conda_prefix = os.environ.get('CONDA_PREFIX')
+        if conda_prefix:
+            conda_lib = os.path.join(conda_prefix, 'lib')
+            env.Append(LINKFLAGS=['-Wl,-rpath,' + conda_lib])
+        else:
+            import sysconfig
+            py_libdir = sysconfig.get_config_var('LIBDIR')
+            if py_libdir and os.path.isdir(py_libdir):
+                env.Append(LINKFLAGS=['-Wl,-rpath,' + py_libdir])
+
     with gem5_scons.Configure(env) as conf:
         # verify that this stuff works
         if not conf.CheckHeader('Python.h', '<>'):
