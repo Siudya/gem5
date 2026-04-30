@@ -279,6 +279,7 @@ def create(args, restore_metadata=None):
     use_kvm_boot = (
         args.cpu == "kvm"
         or args.save_kvm_roi_checkpoint
+        or args.kvm_fast_forward
         or args.restore
     )
     if use_kvm_boot and args.num_cpus > KVM_AFFINITY_CLUSTER_SIZE:
@@ -294,9 +295,12 @@ def create(args, restore_metadata=None):
         platform.clcd = AmbaFake(pio_addr=0x1C1F0000, ignore_access=True)
 
     # Determine boot CPU vs target CPU
-    if args.save_kvm_roi_checkpoint or args.restore:
-        boot_cpu_class = kvm_cpu_class if args.save_kvm_roi_checkpoint else cpu_types[args.cpu]
-        target_cpu_class = cpu_types[args.cpu] if args.save_kvm_roi_checkpoint else None
+    if args.save_kvm_roi_checkpoint or args.kvm_fast_forward:
+        boot_cpu_class = kvm_cpu_class
+        target_cpu_class = cpu_types[args.cpu]
+    elif args.restore:
+        boot_cpu_class = cpu_types[args.cpu]
+        target_cpu_class = None
     else:
         boot_cpu_class = cpu_types[args.cpu]
         target_cpu_class = None
@@ -476,8 +480,8 @@ def create(args, restore_metadata=None):
             kernel_cmd.append("rw")
         if args.initrd:
             kernel_cmd.append("rdinit=/init")
-        enable_switch_notice = args.save_kvm_roi_checkpoint or args.restore
-        if args.save_kvm_roi_checkpoint or args.restore:
+        enable_switch_notice = args.save_kvm_roi_checkpoint or args.kvm_fast_forward or args.restore
+        if args.save_kvm_roi_checkpoint or args.kvm_fast_forward or args.restore:
             kernel_cmd.append("gem5_m5ops_mmio=1")
             kernel_cmd.append("iomem=relaxed")
         if enable_switch_notice:
@@ -498,15 +502,22 @@ def run(args, root, switched=False):
         exit_msg = event.getCause()
 
         if exit_msg == "checkpoint":
-            if not args.save_kvm_roi_checkpoint:
+            if not (args.save_kvm_roi_checkpoint or args.kvm_fast_forward):
                 m5.fatal("Unexpected checkpoint event outside KVM ROI checkpoint mode")
 
             if not has_switch_cpus or switched:
                 m5.fatal("KVM ROI checkpoint flow requires a pending CPU switch")
 
-            cpt_dir = _save_checkpoint(args, KVM_ROI_CHECKPOINT_KIND)
-            print(f"KVM ROI checkpoint saved: {cpt_dir}")
-            sys.exit(0)
+            if args.save_kvm_roi_checkpoint:
+                cpt_dir = _save_checkpoint(args, KVM_ROI_CHECKPOINT_KIND)
+                print(f"KVM ROI checkpoint saved: {cpt_dir}")
+                sys.exit(0)
+            else:  # args.kvm_fast_forward
+                print(f"Switching CPUs at tick {m5.curTick()}")
+                m5.switchCpus(_get_switch_cpu_list(root.system))
+                switched = True
+                print(f"CPU switch complete, resuming simulation @ tick {m5.curTick()}")
+                continue  # loop back to m5.simulate()
 
         elif exit_msg == "m5_exit instruction encountered":
             print(f"Simulation complete @ tick {m5.curTick()}")
@@ -554,6 +565,9 @@ def main():
                         help="Boot with ArmV8KvmCPU, switch to --cpu at ROI "
                              "start, immediately save a cold-start ROI checkpoint, "
                              "and exit")
+    parser.add_argument("--kvm-fast-forward", action="store_true",
+                        help="Boot with ArmV8KvmCPU, switch to --cpu at ROI, "
+                             "continue simulation without saving checkpoint")
     parser.add_argument("--restore", type=str, default=None,
                          help="Restore directly from a KVM ROI checkpoint "
                               "directory (or outdir with latest_checkpoint.txt)")
@@ -617,6 +631,18 @@ def main():
     if args.save_kvm_roi_checkpoint and not devices.have_kvm:
         parser.error("ArmV8KvmCPU is not available in this gem5 build")
 
+    if args.kvm_fast_forward:
+        if args.cpu not in ("timing", "minor", "o3"):
+            parser.error("--kvm-fast-forward requires --cpu timing, minor, or o3")
+        if args.save_kvm_roi_checkpoint:
+            parser.error("--kvm-fast-forward and --save-kvm-roi-checkpoint are mutually exclusive")
+        if args.restore:
+            parser.error("--kvm-fast-forward and --restore are mutually exclusive")
+        if args.bare_metal:
+            parser.error("--kvm-fast-forward is not available in bare-metal mode")
+        if not devices.have_kvm:
+            parser.error("ArmV8KvmCPU is not available in this gem5 build")
+
     if args.restore:
         if not os.path.isfile(os.path.join(args.restore, "m5.cpt")):
             parser.error(f"Invalid checkpoint directory: {args.restore}")
@@ -679,7 +705,7 @@ def main():
 
     root = Root(full_system=True)
     root.system = create(args, restore_metadata)
-    if args.cpu == "kvm" or args.save_kvm_roi_checkpoint:
+    if args.cpu == "kvm" or args.save_kvm_roi_checkpoint or args.kvm_fast_forward:
         _enable_kvm(root.system)
         if _using_pdes(root):
             root.sim_quantum = int(1e9)  # 1ms at default 1THz tick rate
