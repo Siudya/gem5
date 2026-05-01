@@ -53,6 +53,7 @@ import os
 import sys
 
 import m5
+from m5.SimObject import SimObject
 from m5.objects import *
 from m5.options import *
 from m5.util import addToPath
@@ -302,6 +303,10 @@ def create(args, restore_metadata=None):
         # connect() flow cannot wire up.  Replace it with a no-op fake
         # since we don't need a display controller.
         platform.clcd = AmbaFake(pio_addr=0x1C1F0000, ignore_access=True)
+        # Match gem5's ARM KVM configurations: use the simulated GIC and
+        # hide the generic timer's system interface from the guest DTB.
+        GenericTimer.generateDeviceTree = SimObject.generateDeviceTree
+        platform.gic.simulate_gic = True
 
     # Determine boot CPU vs target CPU
     if args.save_kvm_roi_checkpoint or args.kvm_fast_forward:
