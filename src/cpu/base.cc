@@ -127,7 +127,8 @@ CPUProgressEvent::description() const
 }
 
 BaseCPU::BaseCPU(const Params &p, bool is_checker)
-    : ClockedObject(p), instCnt(0), _cpuId(p.cpu_id), _socketId(p.socket_id),
+    : ClockedObject(p), instCnt(0), heartbeatInsts(p.heartbeat_insts),
+      _cpuId(p.cpu_id), _socketId(p.socket_id),
       _instRequestorId(p.system->getRequestorId(this, "inst")),
       _dataRequestorId(p.system->getRequestorId(this, "data")),
       _taskId(context_switch_task_id::Unknown), _pid(invldPid),
@@ -369,6 +370,19 @@ BaseCPU::startup()
     if (powerState->get() == enums::PwrState::UNDEFINED)
         powerState->set(enums::PwrState::ON);
 
+}
+
+void
+BaseCPU::heartbeat(Counter num_insts)
+{
+    if (heartbeatInsts <= 0 || num_insts == 0 ||
+        (num_insts % heartbeatInsts) != 0) {
+        return;
+    }
+
+    cprintf("[Core %d]: Hearbeat @ %lld insn @ tick %llu\n",
+            cpuId(), static_cast<long long>(num_insts),
+            static_cast<unsigned long long>(curTick()));
 }
 
 probing::PMUUPtr

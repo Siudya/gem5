@@ -409,6 +409,19 @@ TimingSimpleCPU::translationFault(const Fault &fault)
     advanceInst(fault);
 }
 
+void
+TimingSimpleCPU::countInstAndHeartbeat()
+{
+    SimpleExecContext &t_info = *threadInfo[curThread];
+    const bool committed_inst =
+        !curStaticInst->isMicroop() || curStaticInst->isLastMicroop();
+
+    countInst();
+    if (committed_inst) {
+        heartbeat(t_info.numInst);
+    }
+}
+
 PacketPtr
 TimingSimpleCPU::buildPacket(const RequestPtr &req, bool read)
 {
@@ -876,9 +889,9 @@ TimingSimpleCPU::completeIfetch(PacketPtr pkt)
         Fault fault = curStaticInst->execute(&t_info, traceData);
 
         // keep an instruction count
-        if (fault == NoFault)
-            countInst();
-        else if (traceData) {
+        if (fault == NoFault) {
+            countInstAndHeartbeat();
+        } else if (traceData) {
             traceFault();
         }
 
@@ -1063,9 +1076,9 @@ TimingSimpleCPU::completeDataAccess(PacketPtr pkt)
     }
 
     // keep an instruction count
-    if (fault == NoFault)
-        countInst();
-    else if (traceData) {
+    if (fault == NoFault) {
+        countInstAndHeartbeat();
+    } else if (traceData) {
         traceFault();
     }
 

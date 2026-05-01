@@ -231,6 +231,15 @@ def _get_boot_cpus(system):
     ]
 
 
+def _set_cpu_heartbeat(system, heartbeat_insts):
+    for cpu in _get_boot_cpus(system):
+        cpu.heartbeat_insts = heartbeat_insts
+
+    if hasattr(system, "switch_cpus"):
+        for cpu in system.switch_cpus:
+            cpu.heartbeat_insts = heartbeat_insts
+
+
 def _enable_kvm(system, use_pdes=True):
     if not devices.have_kvm or kvm_cpu_class is None:
         m5.fatal("ArmV8KvmCPU is not available in this gem5 build")
@@ -364,6 +373,7 @@ def create(args, restore_metadata=None):
             cpu.createThreads()
             switch_cpus.append(cpu)
         system.switch_cpus = switch_cpus
+    _set_cpu_heartbeat(system, args.heartbeat_insts)
 
     # PCI VirtIO block device (optional, for disk image)
     if args.disk_image:
@@ -560,6 +570,9 @@ def main():
                         help="CPU frequency (default: 3GHz)")
     parser.add_argument("-n", "--num-cpus", type=int, default=16,
                         help="Number of CPUs: 4, 16, or 32 (default: 16)")
+    parser.add_argument("--heartbeat-insts", type=int, default=0,
+                        help="Print a per-core heartbeat every N committed "
+                             "instructions on timing/o3 CPUs; 0 disables")
 
     parser.add_argument("--save-kvm-roi-checkpoint", action="store_true",
                         help="Boot with ArmV8KvmCPU, switch to --cpu at ROI "
@@ -675,6 +688,8 @@ def main():
     # Explicit dispatch: 4 => 2x4, 16 => 4x8, 32 => 4x12
     if args.num_cpus not in (4, 16, 32):
         parser.error("--num-cpus only supports 4, 16, or 32")
+    if args.heartbeat_insts < 0:
+        parser.error("--heartbeat-insts must be a non-negative integer")
     
     if args.num_cpus == 4:
         noc_name = "delegato_single_2x4.py"

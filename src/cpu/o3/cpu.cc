@@ -1139,6 +1139,7 @@ CPU::instDone(ThreadID tid, const DynInstPtr &inst)
 
         // Check for instruction-count-based events.
         thread[tid]->comInstEventQueue.serviceEvents(thread[tid]->numInst);
+        heartbeat(thread[tid]->numInst);
     }
     thread[tid]->numOp++;
     thread[tid]->threadStats.numOps++;

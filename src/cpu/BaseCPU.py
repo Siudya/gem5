@@ -147,6 +147,10 @@ class BaseCPU(ClockedObject):
     progress_interval = Param.Frequency(
         "0Hz", "frequency to print out the progress message"
     )
+    heartbeat_insts = Param.Counter(
+        0,
+        "Print a per-core heartbeat every N committed instructions; 0 disables",
+    )
 
     switched_out = Param.Bool(
         False,

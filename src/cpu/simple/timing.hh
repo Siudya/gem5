@@ -254,6 +254,7 @@ class TimingSimpleCPU : public BaseSimpleCPU
     };
 
     void updateCycleCounts();
+    void countInstAndHeartbeat();
 
     IcachePort icachePort;
     DcachePort dcachePort;

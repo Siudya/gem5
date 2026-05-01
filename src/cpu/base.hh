@@ -110,6 +110,9 @@ class BaseCPU : public ClockedObject
     /// @todo unify this with the counters that cpus individually keep
     Tick instCnt;
 
+    /** Per-core committed-instruction heartbeat interval; 0 disables it. */
+    const Counter heartbeatInsts;
+
     // every cpu has an id, put it in the base cpu
     // Set at initialization, only time a cpuId might change is during a
     // takeover (which should be done from within the BaseCPU anyway,
@@ -244,6 +247,8 @@ class BaseCPU : public ClockedObject
     inline void workItemEnd() { baseStats.numWorkItemsCompleted++; }
     // @todo remove me after debugging with legion done
     Tick instCount() { return instCnt; }
+
+    void heartbeat(Counter num_insts);
 
   protected:
     std::vector<BaseInterrupts*> interrupts;
