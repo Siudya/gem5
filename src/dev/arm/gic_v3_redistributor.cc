@@ -1050,6 +1050,7 @@ Gicv3Redistributor::copy(Gicv3Registers *from, Gicv3Registers *to)
     // SGI_Base regs
     gic->copyRedistRegister(from, to, affinity, GICR_CTLR);
     gic->copyRedistRegister(from, to, affinity, GICR_WAKER);
+    gic->copyRedistRegister(from, to, affinity, GICR_IGROUPR0);
 
     gic->clearRedistRegister(to, affinity, GICR_ICENABLER0);
     gic->clearRedistRegister(to, affinity, GICR_ICPENDR0);

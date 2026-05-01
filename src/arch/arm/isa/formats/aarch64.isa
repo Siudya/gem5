@@ -287,6 +287,13 @@ namespace Aarch64
                 RegIndex rt = (RegIndex)(uint8_t)bits(machInst, 4, 0);
                 switch (op0) {
                   case 0x0:
+                    // FEAT_SB is a speculation barrier hint; gem5 does not
+                    // model the speculation effects, so it has no architectural
+                    // state change in timing simulation.
+                    if (crn == 0x3 && op1 == 0x3 && crm == 0x0 &&
+                            op2 == 0x7 && rt == 0x1f) {
+                        return new NopInst(machInst);
+                    }
                     // early out for TME
                     if (crn == 0x3 && op1 == 0x3 && op2 == 0x3) {
                         switch (crm) {

@@ -357,7 +357,7 @@ Gicv3::getRedistributorByAddr(Addr addr) const
 uint32_t
 Gicv3::readDistributor(Addr daddr)
 {
-    return distributor->read(daddr, 4, false);
+    return distributor->read(daddr, 4, true);
 }
 
 uint32_t
@@ -365,7 +365,7 @@ Gicv3::readRedistributor(const ArmISA::Affinity &aff, Addr daddr)
 {
     auto redistributor = getRedistributorByAffinity(aff);
     assert(redistributor);
-    return redistributor->read(daddr, 4, false);
+    return redistributor->read(daddr, 4, true);
 }
 
 RegVal
@@ -379,7 +379,7 @@ Gicv3::readCpu(const ArmISA::Affinity &aff, ArmISA::MiscRegIndex misc_reg)
 void
 Gicv3::writeDistributor(Addr daddr, uint32_t data)
 {
-    distributor->write(daddr, data, sizeof(data), false);
+    distributor->write(daddr, data, sizeof(data), true);
 }
 
 void
@@ -387,7 +387,7 @@ Gicv3::writeRedistributor(const ArmISA::Affinity &aff, Addr daddr, uint32_t data
 {
     auto redistributor = getRedistributorByAffinity(aff);
     assert(redistributor);
-    redistributor->write(daddr, data, sizeof(data), false);
+    redistributor->write(daddr, data, sizeof(data), true);
 }
 
 void
