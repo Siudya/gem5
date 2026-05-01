@@ -514,7 +514,7 @@ def run(args, root, switched=False):
                 sys.exit(0)
             else:  # args.kvm_fast_forward
                 print(f"Switching CPUs at tick {m5.curTick()}")
-                m5.switchCpus(_get_switch_cpu_list(root.system))
+                m5.switchCpus(root.system, _get_switch_cpu_list(root.system))
                 switched = True
                 print(f"CPU switch complete, resuming simulation @ tick {m5.curTick()}")
                 continue  # loop back to m5.simulate()
