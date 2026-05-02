@@ -182,8 +182,12 @@ BaseArmKvmCPU::ioctlRun()
     // virtual time.
     {
         std::lock_guard<UncontendedMutex> l(vtime_mutex);
-        if (--vtime_counter == 0)
+        if (--vtime_counter == 0) {
             getOneReg(KVM_REG_ARM_TIMER_CNT, &vtime);
+            static_cast<ArmSystem *>(system)
+                ->getGenericTimer()
+                ->syncSystemCounter(vtime);
+        }
     }
 }
 

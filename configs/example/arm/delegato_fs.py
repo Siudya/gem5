@@ -208,9 +208,59 @@ def _write_checkpoint_metadata(cpt_dir, metadata):
         fh.write("\n")
 
 
+def _retarget_switch_cpu_checkpoint(cpt_dir, num_cpus):
+    checkpoint_path = os.path.join(cpt_dir, "m5.cpt")
+    with open(checkpoint_path, "r", encoding="utf-8") as fh:
+        lines = fh.readlines()
+
+    keep_cpu_cluster_prefixes = (
+        ".data_sequencer",
+        ".inst_sequencer",
+        ".interrupts",
+        ".l1d",
+        ".l1i",
+        ".l2",
+    )
+
+    rewritten = []
+    keep_section = True
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1]
+            keep_section = True
+            for idx in range(num_cpus):
+                switch_prefix = f"system.switch_cpus{idx}"
+                cpu_prefix = f"system.cpu_cluster.cpus{idx}"
+                if section == switch_prefix or section.startswith(switch_prefix + "."):
+                    suffix = section[len(switch_prefix):]
+                    line = f"[{cpu_prefix}{suffix}]\n"
+                    break
+                if section == cpu_prefix:
+                    keep_section = False
+                    break
+                if section.startswith(cpu_prefix + "."):
+                    suffix = section[len(cpu_prefix):]
+                    keep_section = suffix.startswith(keep_cpu_cluster_prefixes)
+                    break
+
+        if keep_section:
+            for idx in range(num_cpus):
+                line = line.replace(
+                    f"system.switch_cpus{idx}",
+                    f"system.cpu_cluster.cpus{idx}",
+                )
+            rewritten.append(line)
+
+    with open(checkpoint_path, "w", encoding="utf-8") as fh:
+        fh.writelines(rewritten)
+
+
 def _save_checkpoint(args, kind):
     cpt_dir = os.path.join(m5.options.outdir, f"cpt.{m5.curTick()}")
     m5.checkpoint(cpt_dir)
+    if kind == KVM_ROI_CHECKPOINT_KIND:
+        _retarget_switch_cpu_checkpoint(cpt_dir, args.num_cpus)
     _write_checkpoint_metadata(cpt_dir, _build_checkpoint_metadata(args, kind))
     return cpt_dir
 
@@ -337,6 +387,9 @@ def create(args, restore_metadata=None):
             kvm_affinity_fold_16=use_folded_kvm_affinity,
             workload=ArmFsLinux(object_file=args.kernel),
         )
+
+    if args.restore:
+        system.release = ArmDefaultRelease.for_kvm()
 
     # CPU cluster (boot CPUs)
     boot_cluster_sizes = [args.num_cpus]
@@ -523,6 +576,10 @@ def run(args, root, switched=False):
                 m5.fatal("KVM ROI checkpoint flow requires a pending CPU switch")
 
             if args.save_kvm_roi_checkpoint:
+                print(f"Switching CPUs at tick {m5.curTick()}")
+                m5.switchCpus(root.system, _get_switch_cpu_list(root.system))
+                switched = True
+                print(f"CPU switch complete, saving checkpoint @ tick {m5.curTick()}")
                 cpt_dir = _save_checkpoint(args, KVM_ROI_CHECKPOINT_KIND)
                 print(f"KVM ROI checkpoint saved: {cpt_dir}")
                 sys.exit(0)

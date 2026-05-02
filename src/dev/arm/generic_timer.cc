@@ -130,9 +130,9 @@ SystemCounter::updateValue()
 }
 
 void
-SystemCounter::setValue(uint64_t new_value)
+SystemCounter::setValue(uint64_t new_value, bool warn_if_enabled)
 {
-    if (_enabled)
+    if (warn_if_enabled && _enabled)
         warn("Explicit value set with counter enabled, UNKNOWNN result\n");
     _value = new_value;
     updateTick();
@@ -529,6 +529,12 @@ GenericTimer::handleStream(CoreTimers::EventStream *ev_stream,
         if (ev_stream->event.scheduled())
             deschedule(ev_stream->event);
     }
+}
+
+void
+GenericTimer::syncSystemCounter(uint64_t value)
+{
+    systemCounter.setValue(value, false);
 }
 
 void

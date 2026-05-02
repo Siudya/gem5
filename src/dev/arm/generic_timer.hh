@@ -143,7 +143,7 @@ class SystemCounter : public SimObject
     void freqUpdateSchedule(size_t new_freq_entry);
 
     /// Sets the value explicitly from writes to CNTCR.CNTCV
-    void setValue(uint64_t new_value);
+    void setValue(uint64_t new_value, bool warn_if_enabled = true);
 
     /// Called from System Counter Listeners to register
     void registerListener(SystemCounterListener *listener);
@@ -296,6 +296,7 @@ class GenericTimer : public SimObject
   public:
     void setMiscReg(int misc_reg, unsigned cpu, RegVal val);
     RegVal readMiscReg(int misc_reg, unsigned cpu);
+    void syncSystemCounter(uint64_t value);
 
   protected:
     class CoreTimers : public SystemCounterListener, public Serializable
