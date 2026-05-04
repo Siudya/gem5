@@ -53,7 +53,6 @@ import os
 import sys
 
 import m5
-from m5.SimObject import SimObject
 from m5.objects import *
 from m5.options import *
 from m5.util import addToPath
@@ -63,7 +62,6 @@ m5.util.addToPath("../..")
 import devices
 from common import (
     ObjectList,
-    Options,
     SysPaths,
 )
 from common.cores.arm import (
@@ -118,14 +116,7 @@ if kvm_cpu_class is not None:
 CHECKPOINT_METADATA_NAME = "checkpoint_metadata.json"
 LATEST_CHECKPOINT_NAME = "latest_checkpoint.txt"
 KVM_ROI_CHECKPOINT_KIND = "kvm_roi_post_switch"
-KVM_SIM_QUANTUM = "1ms"
 KVM_AFFINITY_CLUSTER_SIZE = 16
-
-
-def _to_ticks(value):
-    """Convert a latency string to ticks."""
-
-    return m5.ticks.fromSeconds(m5.util.convert.anyToLatency(value))
 
 
 def _using_pdes(root):
@@ -361,9 +352,6 @@ def create(args, restore_metadata=None):
     if args.save_kvm_roi_checkpoint or args.kvm_fast_forward:
         boot_cpu_class = kvm_cpu_class
         target_cpu_class = cpu_types[args.cpu]
-    elif args.restore:
-        boot_cpu_class = cpu_types[args.cpu]
-        target_cpu_class = None
     else:
         boot_cpu_class = cpu_types[args.cpu]
         target_cpu_class = None
@@ -548,7 +536,7 @@ def create(args, restore_metadata=None):
         if args.initrd:
             kernel_cmd.append("rdinit=/init")
         enable_switch_notice = args.save_kvm_roi_checkpoint or args.kvm_fast_forward or args.restore
-        if args.save_kvm_roi_checkpoint or args.kvm_fast_forward or args.restore:
+        if enable_switch_notice:
             kernel_cmd.append("gem5_m5ops_mmio=1")
             kernel_cmd.append("iomem=relaxed")
         if enable_switch_notice:
@@ -575,18 +563,16 @@ def run(args, root, switched=False):
             if not has_switch_cpus or switched:
                 m5.fatal("KVM ROI checkpoint flow requires a pending CPU switch")
 
+            print(f"Switching CPUs at tick {m5.curTick()}")
+            m5.switchCpus(root.system, _get_switch_cpu_list(root.system))
+            switched = True
+
             if args.save_kvm_roi_checkpoint:
-                print(f"Switching CPUs at tick {m5.curTick()}")
-                m5.switchCpus(root.system, _get_switch_cpu_list(root.system))
-                switched = True
                 print(f"CPU switch complete, saving checkpoint @ tick {m5.curTick()}")
                 cpt_dir = _save_checkpoint(args, KVM_ROI_CHECKPOINT_KIND)
                 print(f"KVM ROI checkpoint saved: {cpt_dir}")
                 sys.exit(0)
             else:  # args.kvm_fast_forward
-                print(f"Switching CPUs at tick {m5.curTick()}")
-                m5.switchCpus(root.system, _get_switch_cpu_list(root.system))
-                switched = True
                 print(f"CPU switch complete, resuming simulation @ tick {m5.curTick()}")
                 continue  # loop back to m5.simulate()
 
