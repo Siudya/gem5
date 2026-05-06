@@ -453,16 +453,18 @@ def create(args, restore_metadata=None):
 
     # AMO placement policy
     # Policy map:  l1d_policy_type  hnf_policy_type
-    #   delegato        4                1           Delegato (C/D/M + RT + PT)
-    #   dynamo          3                0           DynAMO Reuse-PN (AMT in L1D)
+    #   all-near        0                0           All-near (always at L1 DCache)
     #   unique-near     1                0           Unique-near baseline
+    #   dynamo          3                0           DynAMO Reuse-PN (AMT in L1D)
+    #   delegato        4                1           Delegato (C/D/M + RT + PT)
     #   all-far         5                0           All-far (always to HN-F)
     #   aan             6                0           AAN remote AtomicReturn dispatch
     #   aan-nofilter    7                0           AAN dispatch without BAT filtering
     policy_map = {
-        "delegato":     (4, 1),
-        "dynamo":       (3, 0),
+        "all-near":     (0, 0),
         "unique-near":  (1, 0),
+        "dynamo":       (3, 0),
+        "delegato":     (4, 1),
         "all-far":      (5, 0),
         "aan":          (6, 0),
         "aan-nofilter": (7, 0),
@@ -708,11 +710,11 @@ def main():
 
     # AMO policy
     parser.add_argument("--amo-policy", type=str, default="delegato",
-                        choices=["delegato", "dynamo", "unique-near", "all-far",
-                                 "aan", "aan-nofilter"],
-                        help="AMO placement policy: delegato (default), dynamo, "
-                             "unique-near (baseline), all-far, aan, "
-                             "aan-nofilter")
+                        choices=["all-near", "unique-near", "dynamo", "delegato",
+                                 "all-far", "aan", "aan-nofilter"],
+                        help="AMO placement policy: delegato (default), "
+                             "all-near (L1 DCache), unique-near (baseline), "
+                             "dynamo, all-far, aan, aan-nofilter")
 
     args = parser.parse_args()
     args.restore = _resolve_restore_dir(args.restore)
