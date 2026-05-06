@@ -80,6 +80,11 @@ _mem_routers = [
     11, 23, 35, 47,  # Chiplet 1
 ]
 
+_aan_routers = [
+    5, 17, 29, 41,   # Chiplet 0 requester-side D2D boundary
+    6, 18, 30, 42,   # Chiplet 1 requester-side D2D boundary
+]
+
 
 class CHI_RNF(CHI_config.CHI_RNF):
     """Cores distributed across col 1-4 and col 7-10 routers (round-robin)."""
@@ -93,6 +98,12 @@ class CHI_HNF(CHI_config.CHI_HNF):
         router_list = _core_routers
         # 32 HNFs: keep cacheline-granularity striping (64B -> PA[10:6]).
         addr_map = CHI_config.AddrMap(intlv_low_bit=6, xor_low_bit=0)
+
+
+class CHI_AAN(CHI_config.CHI_AAN):
+    """AMO aggregation nodes at requester-side D2D boundary routers."""
+    class NoC_Params(CHI_config.CHI_AAN.NoC_Params):
+        router_list = _aan_routers
 
 
 class CHI_MN(CHI_config.CHI_MN):

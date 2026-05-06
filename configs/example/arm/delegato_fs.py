@@ -457,25 +457,58 @@ def create(args, restore_metadata=None):
     #   dynamo          3                0           DynAMO Reuse-PN (AMT in L1D)
     #   unique-near     1                0           Unique-near baseline
     #   all-far         5                0           All-far (always to HN-F)
+    #   aan             6                0           AAN remote AtomicReturn dispatch
+    #   aan-nofilter    7                0           AAN dispatch without BAT filtering
     policy_map = {
         "delegato":     (4, 1),
         "dynamo":       (3, 0),
         "unique-near":  (1, 0),
         "all-far":      (5, 0),
+        "aan":          (6, 0),
+        "aan-nofilter": (7, 0),
     }
     l1d_policy, hnf_policy = policy_map[args.amo_policy]
     print("AMO policy: %s  (L1D policy_type=%d, HN-F hnf_policy_type=%d)"
           % (args.amo_policy, l1d_policy, hnf_policy))
 
-    for cpu in cpus:
-        cpu.l1d.policy_type = l1d_policy
-        cpu.l1d.cache_block_size_bits = block_size_bits
-        cpu.l1d.delegato_rt_entries = 128
-        cpu.l1d.delegato_rt_assoc = 2
+    aan_controllers = [
+        cntrl
+        for aan in getattr(system.ruby, "aan", [])
+        for cntrl in aan.getAllControllers()
+    ]
+    aan_enabled = l1d_policy in (6, 7)
+    aan_base_cache_id = (
+        min(int(cntrl.version) for cntrl in aan_controllers)
+        if aan_controllers else 0
+    )
+    aan_rows = 4
+    hnf_count = max(1, len(getattr(system.ruby, "hnf", [])))
+    hnf_select_bits = int(math.log(hnf_count, 2))
+    if (1 << hnf_select_bits) != hnf_count:
+        m5.fatal("AAN dispatch requires a power-of-two HNF count")
 
     # Single-die: all cores in one chiplet; dual-chiplet: split evenly
     single_die = args.num_cpus <= 4
     cores_per_chiplet = args.num_cpus if single_die else max(1, args.num_cpus // 2)
+    hnfs_per_chiplet = hnf_count if single_die else max(1, hnf_count // 2)
+    hnfs_per_row = max(1, hnfs_per_chiplet // aan_rows)
+
+    for cpu_idx, cpu in enumerate(cpus):
+        cpu.l1d.policy_type = l1d_policy
+        cpu.l1d.cache_block_size_bits = block_size_bits
+        cpu.l1d.delegato_rt_entries = 128
+        cpu.l1d.delegato_rt_assoc = 2
+        cpu.l1d.aan_enabled = aan_enabled
+        cpu.l1d.aan_base_cache_id = aan_base_cache_id
+        cpu.l1d.aan_num_nodes = len(aan_controllers)
+        cpu.l1d.aan_rows = aan_rows
+        cpu.l1d.aan_requester_chiplet_id = (
+            0 if single_die else min(1, cpu_idx // cores_per_chiplet)
+        )
+        cpu.l1d.aan_hnfs_per_chiplet = hnfs_per_chiplet
+        cpu.l1d.aan_hnfs_per_row = hnfs_per_row
+        cpu.l1d.aan_hnf_select_bits = hnf_select_bits
+
     hnf_idx = 0
     for hnf in system.ruby.hnf:
         for cntrl in hnf.getAllControllers():
@@ -486,6 +519,16 @@ def create(args, restore_metadata=None):
             cntrl.cores_per_chiplet = cores_per_chiplet
             cntrl.hnf_chiplet_id = 0 if hnf_idx < cores_per_chiplet else 1
             hnf_idx += 1
+
+    aan_nofilter = args.amo_policy == "aan-nofilter"
+    for aan in getattr(system.ruby, "aan", []):
+        for cntrl in aan.getAllControllers():
+            cntrl.cache_block_size_bits = block_size_bits
+            cntrl.aan_bat_entries = 128
+            cntrl.aan_bat_assoc = 2
+            for attr in ("aan_nofilter", "aan_bat_nofilter", "aan_disable_filter"):
+                if attr in cntrl.__class__._params:
+                    setattr(cntrl, attr, aan_nofilter)
 
     system.ruby.clk_domain = SrcClockDomain(
         clock=args.ruby_clock, voltage_domain=system.voltage_domain
@@ -665,9 +708,11 @@ def main():
 
     # AMO policy
     parser.add_argument("--amo-policy", type=str, default="delegato",
-                        choices=["delegato", "dynamo", "unique-near", "all-far"],
+                        choices=["delegato", "dynamo", "unique-near", "all-far",
+                                 "aan", "aan-nofilter"],
                         help="AMO placement policy: delegato (default), dynamo, "
-                             "unique-near (baseline), all-far")
+                             "unique-near (baseline), all-far, aan, "
+                             "aan-nofilter")
 
     args = parser.parse_args()
     args.restore = _resolve_restore_dir(args.restore)
@@ -737,7 +782,13 @@ def main():
         parser.error("--num-cpus only supports 4, 16, or 32")
     if args.heartbeat_insts < 0:
         parser.error("--heartbeat-insts must be a non-negative integer")
-    
+    if args.amo_policy in ("aan", "aan-nofilter") and args.num_cpus not in (16, 32):
+        parser.error(
+            "--amo-policy aan/aan-nofilter requires --num-cpus 16 or 32 "
+            "because AAN nodes are only defined in delegato_4x8.py "
+            "and delegato_4x12.py"
+        )
+
     if args.num_cpus == 4:
         noc_name = "delegato_single_2x4.py"
         args.num_l3caches = 4

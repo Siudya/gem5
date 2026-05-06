@@ -137,6 +137,9 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   // Present Near execites all Atomics at L1 except when state is I (set to 2)
   // DynAMO-Reuse-PN uses per-line reuse prediction (set to 3)
   // Delegato uses Unique-near-else-far at L1D (set to 4)
+  // All-far executes atomics at HNF (set to 5)
+  // AAN routes remote AtomicReturn far path to AAN (set to 6)
+  // AAN no-filter routes remote AtomicReturn far path to AAN (set to 7)
   int policy_type := 0;
 
   // DynAMO predictor parameters (only used when policy_type == 3)
@@ -150,6 +153,20 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   // amoReuseCount and upstream_unique is evaluated directly in SLICC)
   int delegato_rt_entries := 128;
   int delegato_rt_assoc := 2;
+
+  // AAN admission table parameters (BAT)
+  int aan_bat_entries := 128;
+  int aan_bat_assoc := 2;
+  bool aan_enabled := "False";
+  bool is_AAN := "False";
+  bool aan_nofilter := "False";
+  int aan_base_cache_id := 0;
+  int aan_num_nodes := 0;
+  int aan_rows := 4;
+  int aan_requester_chiplet_id := 0;
+  int aan_hnfs_per_chiplet := 16;
+  int aan_hnfs_per_row := 4;
+  int aan_hnf_select_bits := 5;
 
   // HN-F Delegato Predictor Table policy
   // 0 = no predictor (default); 1 = Delegato predictor enabled
@@ -524,6 +541,8 @@ machine(MachineType:Cache, "Cache coherency protocol") :
 
     // Send an atomic request downstream.
     SendAtomicReturn,          out_trans="yes", desc="Send atomic request with return";
+    SendAtomicReturn_AAN,      out_trans="yes", desc="Send atomic request with return to AAN";
+    SendAtomicReturn_AANTransparentBypass, out_trans="yes", desc="AAN transparent bypass atomic return to HNF";
     SendAtomicNoReturn,        out_trans="yes", desc="Send atomic request without return";
     SendARData,                desc="Send atomic return request data";
     SendANRData,               desc="Send atomic no return request data";
@@ -793,6 +812,8 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     // Delegato fix_3: deferred reuse — applied when cache_entry becomes resident
     int pendingAmoReuseInc, default="0", desc="Delegato: pending reuse increment for cache_entry";
     bool seedAmoReuseAfterFill, default="false", desc="Delegato: Migrate seed to apply after fill";
+    // AAN hit/fill: set when AAN executes atomic locally
+    bool is_aan_hit, default="false", desc="AAN: executing atomic locally (hit or fill path)";
 
     // Tracks requests sent downstream
     CHIRequestType pendReqType, desc="Sent request type";
@@ -893,6 +914,11 @@ machine(MachineType:Cache, "Cache coherency protocol") :
 
   // Delegato Predictor Table (per HN-F, only active when hnf_policy_type == 1)
   DelegatoPredictorTable delegatoPT, constructor="m_delegato_pt_entries, m_delegato_pt_assoc, m_cache_block_size_bits, m_cores_per_chiplet, m_hnf_chiplet_id";
+
+  // AAN BAT (bypass/admission table): first seen line rejects, later admits.
+  // Staged ahead of the AAN dispatch hooks; current CHI flow instantiates it
+  // without consulting it until later AAN protocol wiring uses the table.
+  AANAdmissionTable aanBAT, constructor="this, m_aan_bat_entries, m_aan_bat_assoc, m_cache_block_size_bits";
 
 
   // DVM data

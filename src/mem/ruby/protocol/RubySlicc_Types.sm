@@ -312,3 +312,15 @@ structure(DelegatoPredictorTable, external = "yes") {
     // Debug: get current state (-1=miss, 0=CA, 1=PC, 2=PO)
     int getState(Addr);
 }
+
+// AAN bypass/admission table (BAT): filtered AAN rejects the first lookup of a
+// line and admits later lookups; no-filter AAN admits every lookup.
+structure(AANAdmissionTable, external = "yes") {
+    bool shouldAdmit(Addr, bool);
+    void incDispatch();
+    void incReceived();
+    void incLocalHit();
+    void incFill();
+    void incBypass();
+    void incAMOExec();
+}

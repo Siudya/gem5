@@ -101,6 +101,7 @@ def create_system(
     CHI_SNF_BootMem = chi_defs.CHI_SNF_BootMem
     CHI_RNI_DMA = chi_defs.CHI_RNI_DMA
     CHI_RNI_IO = chi_defs.CHI_RNI_IO
+    CHI_AAN = getattr(chi_defs, "CHI_AAN", None)
     resolve_addr_map = getattr(chi_defs, "resolve_addr_map", None)
     if resolve_addr_map is None:
         base_chi_config = getattr(chi_defs, "CHI_config", None)
@@ -182,6 +183,20 @@ def create_system(
         all_cntrls.extend(hnf.getAllControllers())
         hnf_dests.extend(hnf.getAllControllers())
 
+    aan_nodes = []
+    if (
+        getattr(options, "amo_policy", None) in ["aan", "aan-nofilter"]
+        and CHI_AAN is not None
+    ):
+        aan_cb = getattr(system, "_aan_gen", CHI_AAN.generate)
+        aan_nodes = aan_cb(options, ruby_system, cpus)
+        if aan_nodes:
+            ruby_system.aan = aan_nodes
+        for aan in aan_nodes:
+            network_nodes.append(aan)
+            network_cntrls.extend(aan.getNetworkSideControllers())
+            all_cntrls.extend(aan.getAllControllers())
+
     # Create the memory controllers
     # Notice we don't define a Directory_Controller type so we don't use
     # create_directories shared by other protocols.
@@ -248,6 +263,8 @@ def create_system(
             rni.setDownstream(hnf_dests)
     if full_system:
         ruby_system.io_rni.setDownstream(hnf_dests)
+    for aan in aan_nodes:
+        aan.setDownstream(hnf_dests)
     for hnf in ruby_system.hnf:
         hnf.setDownstream(mem_dests)
 

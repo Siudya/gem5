@@ -854,7 +854,9 @@ action(Initiate_Atomic_UC, desc="") {
       (policy_type == 1) || // UNIQUE NEAR
       (policy_type == 2) || // PRESENT NEAR
       (policy_type == 3) || // DYNAMO REUSE-PN (UC always near)
-      (policy_type == 4)    // DELEGATO (UC always near)
+      (policy_type == 4) || // DELEGATO (UC always near)
+      (policy_type == 6) || // AAN (UC always near)
+      (policy_type == 7)    // AAN no-filter (UC always near)
       ){
     tbe.actions.push(Event:DataArrayRead);
     tbe.actions.push(Event:DelayAtomic);
@@ -871,7 +873,9 @@ action(Initiate_Atomic_UD, desc="") {
       (policy_type == 1) || // UNIQUE NEAR
       (policy_type == 2) || // PRESENT NEAR
       (policy_type == 3) || // DYNAMO REUSE-PN (UD always near)
-      (policy_type == 4)    // DELEGATO (UD always near)
+      (policy_type == 4) || // DELEGATO (UD always near)
+      (policy_type == 6) || // AAN (UD always near)
+      (policy_type == 7)    // AAN no-filter (UD always near)
       ){
     tbe.actions.push(Event:DataArrayRead);
     tbe.actions.push(Event:DelayAtomic);
@@ -892,9 +896,16 @@ action(Initiate_AtomicReturn_I, desc="") {
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
   } else if ((policy_type == 1) || // UNIQUE NEAR
-             (policy_type == 2) || // PRESENT NEAR
-             (policy_type == 4)) { // DELEGATO (I state → far)
-    tbe.actions.push(Event:SendAtomicReturn);
+              (policy_type == 2) || // PRESENT NEAR
+              (policy_type == 4) || // DELEGATO (I state → far)
+              (policy_type == 6) || // AAN (remote I state → AAN)
+              (policy_type == 7)) { // AAN no-filter (remote I state → AAN)
+    if (((policy_type == 6) || (policy_type == 7)) &&
+        shouldSendAtomicReturnToAAN(tbe.addr)) {
+      tbe.actions.push(Event:SendAtomicReturn_AAN);
+    } else {
+      tbe.actions.push(Event:SendAtomicReturn);
+    }
     tbe.actions.push(Event:SendARData);
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
@@ -930,8 +941,10 @@ action(Initiate_AtomicNoReturn_I, desc="") {
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
   } else if ((policy_type == 1) || // UNIQUE NEAR
-             (policy_type == 2) || // PRESENT NEAR
-             (policy_type == 4)) { // DELEGATO (I state → far)
+              (policy_type == 2) || // PRESENT NEAR
+              (policy_type == 4) || // DELEGATO (I state → far)
+              (policy_type == 6) || // AAN (ANR stays on HNF far path)
+              (policy_type == 7)) { // AAN no-filter (ANR stays on HNF far path)
     tbe.actions.push(Event:SendAtomicNoReturn);
     tbe.actions.push(Event:SendANRData);
     tbe.dataToBeInvalid := true;
@@ -969,8 +982,15 @@ action(Initiate_AtomicReturn_SD, desc="") {
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
   } else if ((policy_type == 1) || // UNIQUE NEAR
-             (policy_type == 4)) { // DELEGATO (SD → far)
-    tbe.actions.push(Event:SendAtomicReturn);
+             (policy_type == 4) || // DELEGATO (SD → far)
+             (policy_type == 6) || // AAN (remote SD → AAN)
+             (policy_type == 7)) { // AAN no-filter (remote SD → AAN)
+    if (((policy_type == 6) || (policy_type == 7)) &&
+        shouldSendAtomicReturnToAAN(tbe.addr)) {
+      tbe.actions.push(Event:SendAtomicReturn_AAN);
+    } else {
+      tbe.actions.push(Event:SendAtomicReturn);
+    }
     tbe.actions.push(Event:SendARData);
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
@@ -1007,7 +1027,9 @@ action(Initiate_AtomicNoReturn_SD, desc="") {
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
   } else if ((policy_type == 1) || // UNIQUE NEAR
-             (policy_type == 4)) { // DELEGATO (SD → far)
+             (policy_type == 4) || // DELEGATO (SD → far)
+             (policy_type == 6) || // AAN (ANR stays on HNF far path)
+             (policy_type == 7)) { // AAN no-filter (ANR stays on HNF far path)
     tbe.actions.push(Event:SendAtomicNoReturn);
     tbe.actions.push(Event:SendANRData);
     tbe.dataToBeInvalid := true;
@@ -1043,8 +1065,15 @@ action(Initiate_AtomicReturn_SC, desc="") {
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
   } else if ((policy_type == 1) || // UNIQUE NEAR
-             (policy_type == 4)) { // DELEGATO (SC → far)
-    tbe.actions.push(Event:SendAtomicReturn);
+             (policy_type == 4) || // DELEGATO (SC → far)
+             (policy_type == 6) || // AAN (remote SC → AAN)
+             (policy_type == 7)) { // AAN no-filter (remote SC → AAN)
+    if (((policy_type == 6) || (policy_type == 7)) &&
+        shouldSendAtomicReturnToAAN(tbe.addr)) {
+      tbe.actions.push(Event:SendAtomicReturn_AAN);
+    } else {
+      tbe.actions.push(Event:SendAtomicReturn);
+    }
     tbe.actions.push(Event:SendARData);
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
@@ -1079,7 +1108,9 @@ action(Initiate_AtomicNoReturn_SC, desc="") {
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
   } else if ((policy_type == 1) || // UNIQUE NEAR
-             (policy_type == 4)) { // DELEGATO (SC → far)
+             (policy_type == 4) || // DELEGATO (SC → far)
+             (policy_type == 6) || // AAN (ANR stays on HNF far path)
+             (policy_type == 7)) { // AAN no-filter (ANR stays on HNF far path)
     tbe.actions.push(Event:SendAtomicNoReturn);
     tbe.actions.push(Event:SendANRData);
     tbe.dataToBeInvalid := true;
@@ -1465,24 +1496,62 @@ action(Initiate_AtomicNoReturn_WriteBack, desc="") {
 }
 
 action(Initiate_AtomicReturn_Forward, desc="") {
-  // Delegato PredictorTable: record AMO and get placement decision
-  // NOTE: Forward path is at L2 (not HN-F), so no PT query here.
-  // L2 simply forwards the atomic to HN-F.
-
-  // Delegato fix_2: track AMO traffic through this L2 (owner-side usage)
-  if (is_valid(cache_entry) && (cache_entry.amoReuseCount < 3)) {
-    cache_entry.amoReuseCount := cache_entry.amoReuseCount + 1;
+  if (is_AAN) {
+    // AAN: branch on hit, fill (BAT admits), or bypass (BAT rejects)
+    aanBAT.incReceived();
+    if (tbe.dataValid && tbe.dataUnique) {
+      // AAN Hit: line is resident with unique ownership → execute atomic locally
+      DPRINTF(RubySlicc, "AAN Hit: local AMO addr=%#x\n", tbe.addr);
+      // AANs are leaf cache nodes with no downstream private sharers. If this
+      // trips, the topology/controller config violates AAN-lite's assumptions.
+      assert(tbe.dir_sharers.isEmpty());
+      aanBAT.incLocalHit();
+      tbe.is_aan_hit := true;
+      tbe.doCacheFill := true;
+      tbe.dataToBeInvalid := false;
+      tbe.actions.push(Event:SendDBIDResp_AR);
+      tbe.actions.pushNB(Event:WriteFEPipe);
+      tbe.actions.push(Event:SendCompData_AR);
+      tbe.actions.push(Event:DelayAtomic);
+      tbe.actions.push(Event:CheckCacheFill);
+      tbe.actions.push(Event:WriteBEPipe);
+      tbe.actions.push(Event:TagArrayWrite);
+    } else if (aanBAT.shouldAdmit(tbe.addr, aan_nofilter)) {
+      // AAN Miss + BAT Admits: fetch ownership via ReadUnique, then execute locally
+      DPRINTF(RubySlicc, "AAN Fill: BAT admitted addr=%#x\n", tbe.addr);
+      aanBAT.incFill();
+      tbe.is_aan_hit := true;
+      tbe.doCacheFill := true;
+      tbe.dataToBeInvalid := false;
+      tbe.actions.push(Event:SendReadUnique);
+      tbe.actions.pushNB(Event:WriteFEPipe);
+      tbe.actions.push(Event:SendDBIDResp_AR);
+      tbe.actions.push(Event:SendCompData_AR);
+      tbe.actions.push(Event:DelayAtomic);
+      tbe.actions.push(Event:CheckCacheFill);
+      tbe.actions.push(Event:WriteBEPipe);
+      tbe.actions.push(Event:TagArrayWrite);
+    } else {
+      // AAN Miss + BAT Rejects: bypass — forward to HNF
+      DPRINTF(RubySlicc, "AAN Bypass: BAT rejected addr=%#x\n", tbe.addr);
+      aanBAT.incBypass();
+      tbe.actions.push(Event:SendAtomicReturn_AANTransparentBypass);
+    }
+  } else {
+    // Non-AAN (L2): forward to HNF
+    // Delegato fix_2: track AMO traffic through this L2 (owner-side usage)
+    if (is_valid(cache_entry) && (cache_entry.amoReuseCount < 3)) {
+      cache_entry.amoReuseCount := cache_entry.amoReuseCount + 1;
+    }
+    tbe.actions.push(Event:SendAtomicReturn);
+    tbe.actions.pushNB(Event:WriteFEPipe);
+    tbe.actions.push(Event:SendDBIDResp_AR);
+    tbe.actions.push(Event:SendARData);
+    tbe.actions.push(Event:SendCompData_AR);
+    tbe.actions.push(Event:WriteBEPipe);
+    tbe.actions.pushNB(Event:TagArrayWrite);
+    tbe.dataToBeInvalid := true;
   }
-
-  tbe.actions.push(Event:SendAtomicReturn);
-  tbe.actions.pushNB(Event:WriteFEPipe);
-  tbe.actions.push(Event:SendDBIDResp_AR);
-  tbe.actions.push(Event:SendARData);
-  tbe.actions.push(Event:SendCompData_AR);
-  tbe.actions.push(Event:WriteBEPipe);
-  tbe.actions.pushNB(Event:TagArrayWrite);
-
-  tbe.dataToBeInvalid := true;
 }
 
 action(Initiate_AtomicNoReturn_Forward, desc="") {
@@ -2130,6 +2199,34 @@ action(Send_AtomicReturn, desc="") {
   clearExpectedReqResp(tbe);
   tbe.expected_req_resp.addExpectedRespType(CHIResponseType:DBIDResp);
   tbe.expected_req_resp.addExpectedCount(1);
+}
+
+action(Send_AtomicReturn_AAN, desc="") {
+  assert(is_valid(tbe));
+  aanBAT.incDispatch();
+  enqueue(reqOutPort, CHIRequestMsg, request_latency) {
+    prepareRequestAtomic(tbe, CHIRequestType:AtomicReturn, out_msg);
+    out_msg.Destination.add(mapAddressToAANMachine(tbe.addr));
+    allowRequestRetry(tbe, out_msg);
+  }
+  clearExpectedReqResp(tbe);
+  tbe.expected_req_resp.addExpectedRespType(CHIResponseType:DBIDResp);
+  tbe.expected_req_resp.addExpectedCount(1);
+}
+
+action(Send_AtomicReturn_AANTransparentBypass, desc="") {
+  assert(is_valid(tbe));
+  assert(is_AAN);
+  enqueue(reqOutPort, CHIRequestMsg, request_latency) {
+    prepareRequestAtomic(tbe, CHIRequestType:AtomicReturn, out_msg);
+    // HN-F must respond directly to the original RN-F; AAN finalizes after
+    // forwarding and does not participate in retry, DBID, data, or completion.
+    out_msg.requestor := tbe.requestor;
+    out_msg.fwdRequestor := tbe.requestor;
+    out_msg.allowRetry := true;
+    out_msg.Destination.add(mapAddressToDownstreamMachine(tbe.addr));
+  }
+  clearExpectedReqResp(tbe);
 }
 
 action(Send_AtomicNoReturn, desc="") {
@@ -2801,10 +2898,14 @@ action(UpdateDataState_FromWUDataResp, desc="") {
 
 action(UpdateDataState_FromADataResp, desc="") {
   assert(is_valid(tbe));
-  if (is_HN && (tbe.expected_req_resp.hasReceivedData()) &&
+  if ((is_HN || (is_AAN && tbe.is_aan_hit)) &&
+      (tbe.expected_req_resp.hasReceivedData()) &&
       ((tbe.reqType == CHIRequestType:AtomicReturn) ||
        (tbe.reqType == CHIRequestType:AtomicNoReturn))) {
     DPRINTF(RubySlicc, "Atomic before %s\n", tbe.dataBlk);
+    if (is_AAN && tbe.is_aan_hit) {
+      aanBAT.incAMOExec();
+    }
 
     tbe.oldDataBlk := tbe.dataBlk;
     tbe.dataBlk.atomicPartial(tbe.dataBlk, tbe.atomic_op);
@@ -3005,6 +3106,8 @@ action(Receive_ReqResp_CopyDBID, desc="Copy the rsp DBID into the TBE") {
   }
   peek(rspInPort, CHIResponseMsg) {
     tbe.txnId := in_msg.dbid;
+    tbe.pendReqDest.clear();
+    tbe.pendReqDest.add(in_msg.responder);
   }
 }
 
@@ -3023,8 +3126,12 @@ action(Receive_RetryAck, desc="") {
   assert(is_valid(tbe));
   assert(tbe.pendReqAllowRetry);
   assert(tbe.rcvdRetryAck == false);
-  tbe.rcvdRetryAck := true;
-  destsWaitingRetry.addNetDest(tbe.pendReqDest);
+  peek(rspInPort, CHIResponseMsg) {
+    tbe.pendReqDest.clear();
+    tbe.pendReqDest.add(in_msg.responder);
+    tbe.rcvdRetryAck := true;
+    destsWaitingRetry.addNetDest(tbe.pendReqDest);
+  }
   enqueueDoRetry(tbe);
 }
 
@@ -3058,8 +3165,12 @@ action(Receive_RetryAck_Hazard, desc="") {
   TBE hazard_tbe := getHazardTBE(tbe);
   assert(hazard_tbe.pendReqAllowRetry);
   assert(hazard_tbe.rcvdRetryAck == false);
-  hazard_tbe.rcvdRetryAck := true;
-  destsWaitingRetry.addNetDest(hazard_tbe.pendReqDest);
+  peek(rspInPort, CHIResponseMsg) {
+    hazard_tbe.pendReqDest.clear();
+    hazard_tbe.pendReqDest.add(in_msg.responder);
+    hazard_tbe.rcvdRetryAck := true;
+    destsWaitingRetry.addNetDest(hazard_tbe.pendReqDest);
+  }
   enqueueDoRetry(hazard_tbe);
 }
 
@@ -3177,7 +3288,8 @@ action(Send_WBData, desc="") {
       }
     }
   }
-  tbe.snd_destination := mapAddressToDownstreamMachine(tbe.addr);
+  assert(tbe.pendReqDest.isEmpty() == false);
+  tbe.snd_destination := tbe.pendReqDest.smallestElement();
   setupPendingSend(tbe);
 }
 
@@ -3185,7 +3297,8 @@ action(Send_WUData, desc="") {
   assert(is_valid(tbe));
   assert(tbe.dataBlkValid.count() > 0);
   tbe.snd_msgType := CHIDataType:NCBWrData;
-  tbe.snd_destination := mapAddressToDownstreamMachine(tbe.addr);
+  assert(tbe.pendReqDest.isEmpty() == false);
+  tbe.snd_destination := tbe.pendReqDest.smallestElement();
   setupPendingPartialSend(tbe);
 }
 
@@ -3201,14 +3314,16 @@ action(CheckWUComp, desc="") {
 action(Send_ARData, desc="") {
   assert(is_valid(tbe));
   tbe.snd_msgType := CHIDataType:NCBWrData;
-  tbe.snd_destination := mapAddressToDownstreamMachine(tbe.addr);
+  assert(tbe.pendReqDest.isEmpty() == false);
+  tbe.snd_destination := tbe.pendReqDest.smallestElement();
   setupPendingAtomicSend(tbe);
 }
 
 action(Send_ANRData, desc="") {
   assert(is_valid(tbe));
   tbe.snd_msgType := CHIDataType:NCBWrData;
-  tbe.snd_destination := mapAddressToDownstreamMachine(tbe.addr);
+  assert(tbe.pendReqDest.isEmpty() == false);
+  tbe.snd_destination := tbe.pendReqDest.smallestElement();
   setupPendingAtomicSend(tbe);
 }
 
@@ -4073,23 +4188,31 @@ action(Callback_Miss, desc="") {
   // Delegato Migrate at L2: CompData_UD_PD arrived for AtomicReturn.
   // Data is in tbe.dataBlk (UD), AMO not yet executed. Execute locally.
   // Send_Data will use tbe.oldDataBlk for the response to L1D.
-  } else if (tbe.dataValid && tbe.dataUnique &&
+  } else if (!is_HN && tbe.dataValid && tbe.dataUnique &&
              (tbe.reqType == CHIRequestType:AtomicReturn) &&
              !tbe.dataAMOValid) {
-    DPRINTF(RubySlicc, "Delegato Migrate at L2: executing AMO locally addr=%#x\n",
-            tbe.addr);
-    DPRINTF(RubySlicc, "Migrate before %s\n", tbe.dataBlk);
-    tbe.oldDataBlk := tbe.dataBlk;
-    tbe.dataBlk.atomicPartial(tbe.dataBlk, tbe.atomic_op);
-    tbe.dataBlk.clearAtomicLogEntries();
-    DPRINTF(RubySlicc, "Migrate after %s\n", tbe.dataBlk);
-    tbe.dataDirty := true;
-    tbe.dataToBeInvalid := false;
-    // Delegato fix_3: Migrate completes → line stays at requester L2.
-    // cache_entry may not exist yet (state I before fill); defer seed.
-    assert(tbe.doCacheFill);
-    assert(tbe.seedAmoReuseAfterFill == false);
-    tbe.seedAmoReuseAfterFill := true;
+    if (tbe.is_aan_hit) {
+      // AAN fill: CompData has arrived, but the AMO operand may still be
+      // pending in NCBWrData. Keep the line resident for local execution.
+      DPRINTF(RubySlicc, "AAN fill CompData received addr=%#x\n", tbe.addr);
+      assert(tbe.doCacheFill);
+      tbe.dataToBeInvalid := false;
+    } else {
+      DPRINTF(RubySlicc, "Delegato Migrate at L2: executing AMO locally addr=%#x\n",
+              tbe.addr);
+      DPRINTF(RubySlicc, "Migrate before %s\n", tbe.dataBlk);
+      tbe.oldDataBlk := tbe.dataBlk;
+      tbe.dataBlk.atomicPartial(tbe.dataBlk, tbe.atomic_op);
+      tbe.dataBlk.clearAtomicLogEntries();
+      DPRINTF(RubySlicc, "Migrate after %s\n", tbe.dataBlk);
+      tbe.dataDirty := true;
+      tbe.dataToBeInvalid := false;
+      // Delegato fix_3: Migrate completes → line stays at requester L2.
+      // cache_entry may not exist yet (state I before fill); defer seed.
+      assert(tbe.doCacheFill);
+      assert(tbe.seedAmoReuseAfterFill == false);
+      tbe.seedAmoReuseAfterFill := true;
+    }
   }
 }
 

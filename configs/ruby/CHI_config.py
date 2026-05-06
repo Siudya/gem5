@@ -74,6 +74,13 @@ class L2Cache(RubyCache):
     tagAccessLatency = 2
 
 
+class AANCache(RubyCache):
+    dataAccessLatency = 6
+    tagAccessLatency = 2
+    size = "4KiB"
+    assoc = 4
+
+
 class Versions:
     """
     Helper class to obtain unique ids for a given controller class.
@@ -385,6 +392,42 @@ class CHI_L2Controller(Base_CHI_Cache_Controller):
         self.unify_repl_TBEs = False
 
 
+class CHI_AANController(Base_CHI_Cache_Controller):
+    """
+    Cache controller for an AMO Aggregation Node.
+    """
+
+    def __init__(self, ruby_system, cache, prefetcher):
+        super().__init__(ruby_system)
+        self.sequencer = NULL
+        self.cache = cache
+        self.prefetcher = prefetcher
+        self.use_prefetcher = prefetcher != NULL
+        self.allow_SD = False
+        self.is_HN = False
+        self.is_AAN = True
+        self.enable_DMT = False
+        self.enable_DCT = False
+        self.send_evictions = False
+        self.alloc_on_seq_acc = False
+        self.alloc_on_seq_line_write = False
+        self.alloc_on_readshared = False
+        self.alloc_on_readunique = True
+        self.alloc_on_readonce = False
+        self.alloc_on_writeback = True
+        self.alloc_on_atomic = False
+        self.dealloc_on_unique = False
+        self.dealloc_on_shared = False
+        self.dealloc_backinv_unique = True
+        self.dealloc_backinv_shared = True
+        self.number_of_TBEs = 32
+        self.number_of_repl_TBEs = 32
+        self.number_of_snoop_TBEs = 16
+        self.number_of_DVM_TBEs = 1
+        self.number_of_DVM_snoop_TBEs = 1
+        self.unify_repl_TBEs = False
+
+
 class CHI_HNFController(Base_CHI_Cache_Controller):
     """
     Default parameters for a coherent home node (HNF) cache controller
@@ -679,6 +722,60 @@ class CHI_RNF(CHI_Node):
                 L2Cache(size=options.l2_size, assoc=options.l2_assoc)
             )
         return rnfs
+
+
+class CHI_AAN(CHI_Node):
+    """
+    Encapsulates RN-F-like AMO Aggregation Node controllers.
+    """
+
+    class NoC_Params(CHI_Node.NoC_Params):
+        router_list = []
+        num_nodes = None
+
+    def __init__(
+        self,
+        aan_idx,
+        ruby_system,
+        cache_type,
+        cache_line_size,
+        prefetcher_type=None,
+    ):
+        super().__init__(ruby_system)
+        self._aan_idx = aan_idx
+        self._block_size_bits = int(math.log(cache_line_size, 2))
+
+        aan_cache = cache_type(
+            start_index_bit=self._block_size_bits, is_icache=False
+        )
+        if prefetcher_type != None:
+            aan_pf = prefetcher_type()
+        else:
+            aan_pf = NULL
+
+        self._cntrl = CHI_AANController(ruby_system, aan_cache, aan_pf)
+        self.cntrl = self._cntrl
+        self.connectController(self._cntrl)
+
+    def getAllControllers(self):
+        return [self._cntrl]
+
+    def getNetworkSideControllers(self):
+        return [self._cntrl]
+
+    def setDownstream(self, cntrls):
+        self._cntrl.downstream_destinations = cntrls
+
+    @classmethod
+    def generate(cls, options, ruby_system, cpus):
+        router_list = getattr(cls.NoC_Params, "router_list", []) or []
+        num_nodes = getattr(cls.NoC_Params, "num_nodes", None)
+        if num_nodes is None:
+            num_nodes = len(router_list)
+        return [
+            cls(i, ruby_system, AANCache, options.cacheline_size)
+            for i in range(num_nodes)
+        ]
 
 
 class CHI_HNF(CHI_Node):

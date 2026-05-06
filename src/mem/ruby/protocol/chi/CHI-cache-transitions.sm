@@ -1059,6 +1059,21 @@ transition(BUSY_BLKD, SendAtomicReturn, BUSY_INTR) {DestinationAvailable} {
   ProcessNextState_ClearPending;
 }
 
+transition(BUSY_BLKD, SendAtomicReturn_AAN, BUSY_INTR) {DestinationAvailable} {
+  Pop_TriggerQueue;
+  Send_AtomicReturn_AAN;
+  Profile_OutgoingStart;
+  ProcessNextState_ClearPending;
+}
+
+transition(BUSY_BLKD, SendAtomicReturn_AANTransparentBypass, BUSY_INTR) {DestinationAvailable} {
+  Pop_TriggerQueue;
+  Send_AtomicReturn_AANTransparentBypass;
+  Profile_OutgoingStart;
+  Profile_OutgoingEnd_DatalessResp;
+  ProcessNextState_ClearPending;
+}
+
 transition(BUSY_BLKD, SendAtomicNoReturn, BUSY_INTR) {DestinationAvailable} {
   Pop_TriggerQueue;
   Send_AtomicNoReturn;

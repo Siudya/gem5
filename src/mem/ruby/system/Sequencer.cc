@@ -998,7 +998,6 @@ Sequencer::makeRequest(PacketPtr pkt)
     } else if (pkt->req->isTlbiCmd()) {
         primary_type = secondary_type = tlbiCmdToRubyRequestType(pkt);
         DPRINTF(RubySequencer, "Issuing TLBI\n");
-#if defined (PROTOCOL_CHI)
     } else if (pkt->isAtomicOp()) {
         if (pkt->req->isAtomicReturn()){
             DPRINTF(RubySequencer, "Issuing ATOMIC RETURN \n");
@@ -1010,7 +1009,6 @@ Sequencer::makeRequest(PacketPtr pkt)
                            RubyRequestType_ATOMIC_NO_RETURN;
 
         }
-#endif
     } else if (pkt->req->hasNoAddr()) {
         primary_type = secondary_type = RubyRequestType_hasNoAddr;
     } else {
