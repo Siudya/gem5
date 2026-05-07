@@ -814,6 +814,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool seedAmoReuseAfterFill, default="false", desc="Delegato: Migrate seed to apply after fill";
     // AAN hit/fill: set when AAN executes atomic locally
     bool is_aan_hit, default="false", desc="AAN: executing atomic locally (hit or fill path)";
+    bool aan_fill_read_unique, default="false", desc="AAN fill: downstream ownership is fetched with ReadUnique";
 
     // Tracks requests sent downstream
     CHIRequestType pendReqType, desc="Sent request type";

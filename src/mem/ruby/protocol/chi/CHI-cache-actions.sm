@@ -1521,6 +1521,7 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       DPRINTF(RubySlicc, "AAN Fill: BAT admitted addr=%#x\n", tbe.addr);
       aanBAT.incFill();
       tbe.is_aan_hit := true;
+      tbe.aan_fill_read_unique := true;
       tbe.doCacheFill := true;
       tbe.dataToBeInvalid := false;
       tbe.actions.push(Event:SendReadUnique);
@@ -2606,8 +2607,10 @@ action(Receive_RespSepDataFromCompData, desc="") {
     if (tbe.expected_req_resp.receiveResp(CHIResponseType:RespSepData) == false) {
       error("Received unexpected message");
     }
-    if ((is_HN == false) && (tbe.reqType != CHIRequestType:AtomicReturn) &&
-        ((tbe.reqType != CHIRequestType:AtomicLoad) || (tbe.atomic_to_be_done == true))){
+    if ((is_HN == false) &&
+        (((tbe.reqType != CHIRequestType:AtomicReturn) &&
+          ((tbe.reqType != CHIRequestType:AtomicLoad) || (tbe.atomic_to_be_done == true))) ||
+         (is_AAN && tbe.aan_fill_read_unique))) {
       // must now ack the responder
       tbe.actions.pushFrontNB(Event:SendCompAck);
     }
