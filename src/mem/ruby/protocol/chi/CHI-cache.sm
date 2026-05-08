@@ -552,6 +552,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     SendCompDBIDResp_ANR,  desc="Ack ANR with CompDBIDResp and set expected data";
     SendDBIDResp_ANR,      desc="Ack ANR with DBIDResp and set expected data";
     SendComp_ANR,          desc="Ack ANR completion";
+    CallbackEarlyAtomicReturn, desc="RN-F: complete early AAN AtomicReturn when old value, DBID, and NCBWrData send are all done";
 
     // Dataless requests
     SendEvict,      out_trans="yes", desc="Send a Evict";
@@ -815,6 +816,12 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     // AAN hit/fill: set when AAN executes atomic locally
     bool is_aan_hit, default="false", desc="AAN: executing atomic locally (hit or fill path)";
     bool aan_fill_read_unique, default="false", desc="AAN fill: downstream ownership is fetched with ReadUnique";
+    // AAN AtomicReturn early CompData at RN-F.
+    bool early_ar_compdata_mode, default="false", desc="RN-F: AAN AtomicReturn may receive CompData_I before NCBWrData is sent";
+    bool early_ar_compdata_received, default="false", desc="RN-F: full early AtomicReturn CompData_I old value has arrived";
+    bool early_ar_dbid_received, default="false", desc="RN-F: DBIDResp for early AAN AtomicReturn has arrived";
+    bool early_ar_ncb_sent, default="false", desc="RN-F: NCBWrData for early AAN AtomicReturn has been fully sent";
+    bool early_ar_callback_done, default="false", desc="RN-F: early AAN AtomicReturn sequencer callback has fired";
 
     // Tracks requests sent downstream
     CHIRequestType pendReqType, desc="Sent request type";

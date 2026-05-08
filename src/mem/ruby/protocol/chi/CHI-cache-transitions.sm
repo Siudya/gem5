@@ -1540,6 +1540,7 @@ transition({BUSY_BLKD,BUSY_INTR},
   Receive_ReqDataResp;
   UpdateDataState_FromReqDataResp;
   Callback_Miss;
+  Callback_EarlyAtomicReturn;
   Profile_OutgoingEnd_DataResp;
   Pop_DataInQueue;
   ProcessNextState;
@@ -1673,6 +1674,7 @@ transition({BUSY_INTR,BUSY_BLKD}, DBIDResp, BUSY_BLKD) {
   Receive_ReqResp;
   Receive_ReqResp_CopyDBID;
   Receive_ReqResp_WUNeedComp;
+  Callback_EarlyAtomicReturn;
   Pop_RespInQueue;
   ProcessNextState;
 }
@@ -1686,6 +1688,7 @@ transition(BUSY_BLKD, Comp) {
 transition(BUSY_BLKD, TX_Data) {
   Pop_TriggerQueue;
   Send_Data;
+  Callback_EarlyAtomicReturn;
   ProcessNextState_ClearPending;
 }
 

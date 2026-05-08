@@ -1502,16 +1502,21 @@ action(Initiate_AtomicReturn_Forward, desc="") {
     if (tbe.dataValid && tbe.dataUnique) {
       // AAN Hit: line is resident with unique ownership → execute atomic locally
       DPRINTF(RubySlicc, "AAN Hit: local AMO addr=%#x\n", tbe.addr);
+      // Keep this request on BUSY_BLKD until NCBWrData executes the AMO.
+      // BUSY_BLKD stalls same-address snoops via StallSnoop; moving this
+      // window to BUSY_INTR would allow another core to interrupt the line
+      // between early CompData_I and the local atomic update.
       // AANs are leaf cache nodes with no downstream private sharers. If this
       // trips, the topology/controller config violates AAN-lite's assumptions.
       assert(tbe.dir_sharers.isEmpty());
       aanBAT.incLocalHit();
+      tbe.oldDataBlk := tbe.dataBlk;
       tbe.is_aan_hit := true;
       tbe.doCacheFill := true;
       tbe.dataToBeInvalid := false;
       tbe.actions.push(Event:SendDBIDResp_AR);
       tbe.actions.pushNB(Event:WriteFEPipe);
-      tbe.actions.push(Event:SendCompData_AR);
+      tbe.actions.pushNB(Event:SendCompData_AR);
       tbe.actions.push(Event:DelayAtomic);
       tbe.actions.push(Event:CheckCacheFill);
       tbe.actions.push(Event:WriteBEPipe);
@@ -2205,6 +2210,11 @@ action(Send_AtomicReturn, desc="") {
 action(Send_AtomicReturn_AAN, desc="") {
   assert(is_valid(tbe));
   aanBAT.incDispatch();
+  tbe.early_ar_compdata_mode := true;
+  tbe.early_ar_compdata_received := false;
+  tbe.early_ar_dbid_received := false;
+  tbe.early_ar_ncb_sent := false;
+  tbe.early_ar_callback_done := false;
   enqueue(reqOutPort, CHIRequestMsg, request_latency) {
     prepareRequestAtomic(tbe, CHIRequestType:AtomicReturn, out_msg);
     out_msg.Destination.add(mapAddressToAANMachine(tbe.addr));
@@ -2559,60 +2569,99 @@ action(WriteZero, desc="") {
 
 action(Receive_ReqDataResp, desc="") {
   assert(is_valid(tbe));
-  assert(tbe.expected_req_resp.hasExpected());
+  bool early_ar_data := false;
   peek(datInPort, CHIDataMsg) {
-    // Decrement pending
-    if (tbe.expected_req_resp.receiveData(in_msg.type) == false) {
-      error("Received unexpected message");
-    }
-    // Copy data to tbe only if we didn't have valid data or the received
-    // data is dirty
-    if ((in_msg.type == CHIDataType:NCBWrData) &&
-         ((tbe.reqType == CHIRequestType:AtomicReturn) ||
-          (tbe.reqType == CHIRequestType:AtomicNoReturn))){
-      // DO NOTHING
-    } else if ((in_msg.type == CHIDataType:CompData_I) &&
-               ((tbe.reqType == CHIRequestType:AtomicReturn) ||
-                (tbe.reqType == CHIRequestType:AtomicLoad))) {
-      if(tbe.dataBlkValid.isFull()){
+    early_ar_data := tbe.early_ar_compdata_mode &&
+                     ((in_msg.type == CHIDataType:CompData_I) ||
+                      (in_msg.type == CHIDataType:CompData_UD_PD) ||
+                      (in_msg.type == CHIDataType:CompData_UC));
+  }
+
+  if (early_ar_data) {
+    peek(datInPort, CHIDataMsg) {
+      if (tbe.dataBlkValid.isFull()) {
         tbe.dataBlkValid.clear();
       }
       tbe.oldDataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
       assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
       tbe.dataBlkValid.orMask(in_msg.bitMask);
-      DPRINTF(RubySlicc, "Received %s\n", tbe.oldDataBlk);
-      DPRINTF(RubySlicc, "dataBlkValid = %s\n", tbe.dataBlkValid);
-    } else if ((tbe.dataBlkValid.isFull() == false) ||
-        (in_msg.type == CHIDataType:CompData_UD_PD) ||
-        (in_msg.type == CHIDataType:CompData_SD_PD) ||
-        (in_msg.type == CHIDataType:CBWrData_UD_PD) ||
-        (in_msg.type == CHIDataType:CBWrData_SD_PD) ||
-        (in_msg.type == CHIDataType:NCBWrData)) {
-      // clear mask if started to receive new data
-      if(tbe.dataBlkValid.isFull()){
-        tbe.dataBlkValid.clear();
+      if (tbe.dataBlkValid.isFull()) {
+        tbe.dataValid := true;
+        tbe.dataAMOValid := true;
+        tbe.dataToBeInvalid := true;
+        tbe.early_ar_compdata_received := true;
       }
-      tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
-      assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
-      tbe.dataBlkValid.orMask(in_msg.bitMask);
+      DPRINTF(RubySlicc, "AAN early AtomicReturn CompData received %s\n",
+              tbe.oldDataBlk);
+      DPRINTF(RubySlicc, "dataBlkValid = %s\n", tbe.dataBlkValid);
+    }
+  } else {
+    assert(tbe.expected_req_resp.hasExpected());
+    peek(datInPort, CHIDataMsg) {
+      // Decrement pending
+      if (tbe.expected_req_resp.receiveData(in_msg.type) == false) {
+        error("Received unexpected message");
+      }
+      // Copy data to tbe only if we didn't have valid data or the received
+      // data is dirty
+      if ((in_msg.type == CHIDataType:NCBWrData) &&
+           ((tbe.reqType == CHIRequestType:AtomicReturn) ||
+            (tbe.reqType == CHIRequestType:AtomicNoReturn))){
+        // DO NOTHING
+      } else if ((in_msg.type == CHIDataType:CompData_I) &&
+                 ((tbe.reqType == CHIRequestType:AtomicReturn) ||
+                  (tbe.reqType == CHIRequestType:AtomicLoad))) {
+        if(tbe.dataBlkValid.isFull()){
+          tbe.dataBlkValid.clear();
+        }
+        tbe.oldDataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+        assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
+        tbe.dataBlkValid.orMask(in_msg.bitMask);
+        DPRINTF(RubySlicc, "Received %s\n", tbe.oldDataBlk);
+        DPRINTF(RubySlicc, "dataBlkValid = %s\n", tbe.dataBlkValid);
+      } else if ((tbe.dataBlkValid.isFull() == false) ||
+          (in_msg.type == CHIDataType:CompData_UD_PD) ||
+          (in_msg.type == CHIDataType:CompData_SD_PD) ||
+          (in_msg.type == CHIDataType:CBWrData_UD_PD) ||
+          (in_msg.type == CHIDataType:CBWrData_SD_PD) ||
+          (in_msg.type == CHIDataType:NCBWrData)) {
+        // clear mask if started to receive new data
+        if(tbe.dataBlkValid.isFull()){
+          tbe.dataBlkValid.clear();
+        }
+        tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+        assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
+        tbe.dataBlkValid.orMask(in_msg.bitMask);
+      }
     }
   }
 }
 
 action(Receive_RespSepDataFromCompData, desc="") {
   assert(is_valid(tbe));
-  assert(tbe.expected_req_resp.hasExpected());
-  // check if a previous CompData msg already counted as a RespSepData
-  if (tbe.expected_req_resp.receivedRespType(CHIResponseType:RespSepData) == false) {
-    if (tbe.expected_req_resp.receiveResp(CHIResponseType:RespSepData) == false) {
-      error("Received unexpected message");
-    }
-    if ((is_HN == false) &&
-        (((tbe.reqType != CHIRequestType:AtomicReturn) &&
-          ((tbe.reqType != CHIRequestType:AtomicLoad) || (tbe.atomic_to_be_done == true))) ||
-         (is_AAN && tbe.aan_fill_read_unique))) {
-      // must now ack the responder
-      tbe.actions.pushFrontNB(Event:SendCompAck);
+  assert(tbe.expected_req_resp.hasExpected() || tbe.early_ar_compdata_mode);
+
+  bool early_ar_data := false;
+  peek(datInPort, CHIDataMsg) {
+    early_ar_data := tbe.early_ar_compdata_mode &&
+                     ((in_msg.type == CHIDataType:CompData_I) ||
+                      (in_msg.type == CHIDataType:CompData_UD_PD) ||
+                      (in_msg.type == CHIDataType:CompData_UC));
+  }
+
+  if (early_ar_data == false) {
+    // check if a previous CompData msg already counted as a RespSepData
+    if (tbe.expected_req_resp.receivedRespType(CHIResponseType:RespSepData) == false) {
+      if (tbe.expected_req_resp.receiveResp(CHIResponseType:RespSepData) == false) {
+        error("Received unexpected message");
+      }
+      if ((is_HN == false) &&
+          (((tbe.reqType != CHIRequestType:AtomicReturn) &&
+            ((tbe.reqType != CHIRequestType:AtomicLoad) || (tbe.atomic_to_be_done == true))) ||
+           (is_AAN && tbe.aan_fill_read_unique))) {
+        // must now ack the responder
+        tbe.actions.pushFrontNB(Event:SendCompAck);
+      }
     }
   }
 }
@@ -3112,6 +3161,9 @@ action(Receive_ReqResp_CopyDBID, desc="Copy the rsp DBID into the TBE") {
     tbe.pendReqDest.clear();
     tbe.pendReqDest.add(in_msg.responder);
   }
+  if (tbe.early_ar_compdata_mode) {
+    tbe.early_ar_dbid_received := true;
+  }
 }
 
 action(Receive_SnpResp, desc="") {
@@ -3333,12 +3385,16 @@ action(Send_ANRData, desc="") {
 action(CheckARComp, desc="") {
   assert(is_valid(tbe));
   clearExpectedReqResp(tbe);
-  tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_I);
-  // Delegato Migrate may return CompData_UD_PD or CompData_UC instead of CompData_I
-  tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UD_PD);
-  tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UC);
-  tbe.expected_req_resp.addExpectedRespType(CHIResponseType:RespSepData);
-  tbe.expected_req_resp.setExpectedCount(2);
+  if (tbe.early_ar_compdata_mode) {
+    tbe.expected_req_resp.setExpectedCount(0);
+  } else {
+    tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_I);
+    // Delegato Migrate may return CompData_UD_PD or CompData_UC instead of CompData_I
+    tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UD_PD);
+    tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UC);
+    tbe.expected_req_resp.addExpectedRespType(CHIResponseType:RespSepData);
+    tbe.expected_req_resp.setExpectedCount(2);
+  }
 }
 
 action(CheckANRComp, desc="") {
@@ -3580,6 +3636,11 @@ action(Send_Data, desc="") {
 
   // send next chunk (if any) next cycle
   scheduleSendData(tbe, 1);
+  if (tbe.early_ar_compdata_mode &&
+      (tbe.snd_msgType == CHIDataType:NCBWrData) &&
+      (tbe.snd_pendBytes.count() == 0)) {
+    tbe.early_ar_ncb_sent := true;
+  }
 }
 
 action(Send_RespSepData, desc="") {
@@ -4133,6 +4194,22 @@ action(Callback_ExpressPrefetchHit, desc="") {
   }
 }
 
+action(Callback_EarlyAtomicReturn, desc="") {
+  assert(is_valid(tbe));
+  if (tbe.early_ar_compdata_mode &&
+      tbe.early_ar_compdata_received &&
+      tbe.early_ar_dbid_received &&
+      tbe.early_ar_ncb_sent &&
+      (tbe.early_ar_callback_done == false)) {
+    assert(tbe.dataBlkValid.isFull());
+    assert(tbe.dataAMOValid);
+    DPRINTF(RubySlicc, "AAN early AtomicReturn callback old=%s\n",
+            tbe.oldDataBlk);
+    sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
+    tbe.early_ar_callback_done := true;
+  }
+}
+
 // This is called everytime a data message is received but only goes
 // though once all the blocks are present (tbe.dataValid)
 // NOTE: should create a separate trigger for this callback ?
@@ -4184,7 +4261,9 @@ action(Callback_Miss, desc="") {
     sequencer.atomicCallback(tbe.addr, oldDataBlk, false);
     DPRINTF(RubySlicc, "Atomic after %s\n", tbe.dataBlk);
     tbe.dataDirty := true;
-  } else if (tbe.dataValid && tbe.dataAMOValid && (tbe.reqType == CHIRequestType:AtomicLoad)) {
+  } else if (tbe.dataValid && tbe.dataAMOValid &&
+             (tbe.reqType == CHIRequestType:AtomicLoad) &&
+             (tbe.early_ar_compdata_mode == false)) {
     DPRINTF(RubySlicc, "Atomic before %s\n", tbe.oldDataBlk);
     sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
 
