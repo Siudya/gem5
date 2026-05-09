@@ -2209,12 +2209,16 @@ action(Send_AtomicReturn, desc="") {
 
 action(Send_AtomicReturn_AAN, desc="") {
   assert(is_valid(tbe));
+  if (tbe.early_ar_outgoing_profile_active) {
+    error("AAN early AtomicReturn outgoing profile was already active before sending request");
+  }
   aanBAT.incDispatch();
   tbe.early_ar_compdata_mode := true;
   tbe.early_ar_compdata_received := false;
   tbe.early_ar_dbid_received := false;
   tbe.early_ar_ncb_sent := false;
   tbe.early_ar_callback_done := false;
+  tbe.early_ar_outgoing_profile_active := true;
   enqueue(reqOutPort, CHIRequestMsg, request_latency) {
     prepareRequestAtomic(tbe, CHIRequestType:AtomicReturn, out_msg);
     out_msg.Destination.add(mapAddressToAANMachine(tbe.addr));
@@ -4016,6 +4020,9 @@ action(CheckCacheFill, desc="") {
 action(Finalize_DeallocateRequest, desc="") {
   assert(is_valid(tbe));
   assert(tbe.actions.empty());
+  if (tbe.early_ar_outgoing_profile_active) {
+    error("AAN early AtomicReturn deallocated before outgoing profile completed");
+  }
   wakeupPendingReqs(tbe);
   wakeupPendingSnps(tbe);
   wakeupPendingTgrs(tbe);
@@ -4199,14 +4206,21 @@ action(Callback_EarlyAtomicReturn, desc="") {
   if (tbe.early_ar_compdata_mode &&
       tbe.early_ar_compdata_received &&
       tbe.early_ar_dbid_received &&
-      tbe.early_ar_ncb_sent &&
-      (tbe.early_ar_callback_done == false)) {
+      tbe.early_ar_ncb_sent) {
+    if (tbe.early_ar_callback_done) {
+      error("AAN early AtomicReturn completion was triggered more than once");
+    }
+    if (tbe.early_ar_outgoing_profile_active == false) {
+      error("AAN early AtomicReturn completed without an active outgoing profile");
+    }
     assert(tbe.dataBlkValid.isFull());
     assert(tbe.dataAMOValid);
     DPRINTF(RubySlicc, "AAN early AtomicReturn callback old=%s\n",
             tbe.oldDataBlk);
     sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
     tbe.early_ar_callback_done := true;
+    outgoingTransactionEnd(address, tbe.rcvdRetryAck);
+    tbe.early_ar_outgoing_profile_active := false;
   }
 }
 

@@ -822,6 +822,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool early_ar_dbid_received, default="false", desc="RN-F: DBIDResp for early AAN AtomicReturn has arrived";
     bool early_ar_ncb_sent, default="false", desc="RN-F: NCBWrData for early AAN AtomicReturn has been fully sent";
     bool early_ar_callback_done, default="false", desc="RN-F: early AAN AtomicReturn sequencer callback has fired";
+    bool early_ar_outgoing_profile_active, default="false", desc="RN-F: early AAN AtomicReturn outgoing profile transaction is active";
 
     // Tracks requests sent downstream
     CHIRequestType pendReqType, desc="Sent request type";
