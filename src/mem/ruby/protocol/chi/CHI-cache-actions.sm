@@ -1283,23 +1283,26 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
       delegato_handled := true;
     }
 
-    // Migrate: get data from owner, send CompData_UD to requester (requester executes AMO)
-    // Guard: need either local valid data or an upstream owner to fetch from.
-    if ((delegato_handled == false) && (delegato_action == 2) &&
-        (tbe.dataValid || (tbe.dir_sharers.count() > 0))) {
+    // Migrate: reuse ReadUnique flow — send CompData_UC/UD_PD to requester
+    if ((delegato_handled == false) && (delegato_action == 2)) {
       DPRINTF(RubySlicc, "Delegato: AtomicReturn PoC Migrate to requester %d\n",
               machineIDToNodeID(tbe.requestor));
-      if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
+      tbe.reqType := CHIRequestType:ReadUnique;
+      tbe.dataToBeInvalid := true;
+      if (!tbe.dataValid && (tbe.dir_sharers.count() == 0)) {
+        tbe.actions.push(Event:SendReadNoSnp);
+      } else if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl && tbe.dataMaybeDirtyUpstream) {
+        tbe.actions.push(Event:SendSnpUnique);
+      } else if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
         tbe.actions.push(Event:SendSnpUnique);
       } else if (tbe.dir_sharers.count() > 0) {
         tbe.actions.push(Event:SendSnpUniqueRetToSrc);
+      } else {
+        tbe.actions.push(Event:DataArrayRead);
       }
-      tbe.is_delegato_migrate := true;
-      tbe.actions.push(Event:SendDBIDResp_AR);
-      tbe.actions.push(Event:SendMigrateCompData);
       tbe.actions.push(Event:WaitCompAck);
+      tbe.actions.pushNB(Event:SendCompData);
       tbe.actions.pushNB(Event:TagArrayWrite);
-      tbe.dataToBeInvalid := true;
       delegato_handled := true;
     }
   }
@@ -1346,21 +1349,26 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
       delegato_handled := true;
     }
 
-    if ((delegato_handled == false) && (delegato_action == 2) &&
-        (tbe.dataValid || (tbe.dir_sharers.count() > 0))) {
+    // Migrate: reuse ReadUnique flow
+    if ((delegato_handled == false) && (delegato_action == 2)) {
       DPRINTF(RubySlicc, "Delegato: AtomicReturn WriteBack Migrate to requester %d\n",
               machineIDToNodeID(tbe.requestor));
-      if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
+      tbe.reqType := CHIRequestType:ReadUnique;
+      tbe.dataToBeInvalid := true;
+      if (!tbe.dataValid && (tbe.dir_sharers.count() == 0)) {
+        tbe.actions.push(Event:SendReadNoSnp);
+      } else if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl && tbe.dataMaybeDirtyUpstream) {
+        tbe.actions.push(Event:SendSnpUnique);
+      } else if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
         tbe.actions.push(Event:SendSnpUnique);
       } else if (tbe.dir_sharers.count() > 0) {
         tbe.actions.push(Event:SendSnpUniqueRetToSrc);
+      } else {
+        tbe.actions.push(Event:DataArrayRead);
       }
-      tbe.is_delegato_migrate := true;
-      tbe.actions.push(Event:SendDBIDResp_AR);
-      tbe.actions.push(Event:SendMigrateCompData);
       tbe.actions.push(Event:WaitCompAck);
+      tbe.actions.pushNB(Event:SendCompData);
       tbe.actions.pushNB(Event:TagArrayWrite);
-      tbe.dataToBeInvalid := true;
       delegato_handled := true;
     }
   }
@@ -1580,27 +1588,67 @@ action(Initiate_AtomicNoReturn_Forward, desc="") {
 }
 
 action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
-  tbe.actions.push(Event:SendReadNoSnp);
-  tbe.actions.pushNB(Event:WriteFEPipe);
-  tbe.actions.push(Event:SendDBIDResp_AR);
-  tbe.actions.push(Event:SendCompData_AR);
-  tbe.actions.push(Event:DelayAtomic);
-  tbe.actions.push(Event:CheckCacheFill);
-  tbe.actions.push(Event:WriteBEPipe);
-  tbe.actions.push(Event:TagArrayWrite);
+  bool delegato_migrate := false;
+  if (hnf_policy_type == 1) {
+    int dir_case := 3; // DIR_I
+    int delegato_action := delegatoPT.decideAction(tbe.addr,
+        machineIDToNodeID(tbe.requestor), dir_case,
+        machineIDToNodeID(tbe.dir_owner));
+    DPRINTF(RubySlicc, "Delegato PT (Miss_Alloc): addr=%#x req=%d action=%d\n",
+            tbe.addr, machineIDToNodeID(tbe.requestor), delegato_action);
+    if (delegato_action == 2) {
+      tbe.reqType := CHIRequestType:ReadUnique;
+      tbe.dataToBeInvalid := true;
+      tbe.actions.push(Event:SendReadNoSnp);
+      tbe.actions.push(Event:WaitCompAck);
+      tbe.actions.pushNB(Event:SendCompData);
+      tbe.actions.pushNB(Event:TagArrayWrite);
+      delegato_migrate := true;
+    }
+  }
+  if (delegato_migrate == false) {
+    tbe.actions.push(Event:SendReadNoSnp);
+    tbe.actions.pushNB(Event:WriteFEPipe);
+    tbe.actions.push(Event:SendDBIDResp_AR);
+    tbe.actions.push(Event:SendCompData_AR);
+    tbe.actions.push(Event:DelayAtomic);
+    tbe.actions.push(Event:CheckCacheFill);
+    tbe.actions.push(Event:WriteBEPipe);
+    tbe.actions.push(Event:TagArrayWrite);
+  }
 }
 
 action(Initiate_AtomicReturn_Miss, desc="") {
-  tbe.actions.push(Event:SendReadNoSnp);
-  tbe.actions.pushNB(Event:WriteFEPipe);
-  tbe.actions.push(Event:SendDBIDResp_AR);
-  tbe.actions.push(Event:SendCompData_AR);
-  tbe.actions.push(Event:DelayAtomic);
-  tbe.actions.push(Event:WriteBEPipe);
-  tbe.actions.push(Event:SendWriteNoSnp);
-  tbe.actions.push(Event:SendWUData);
-  tbe.dataToBeInvalid := true;
-  tbe.actions.pushNB(Event:TagArrayWrite);
+  bool delegato_migrate := false;
+  if (hnf_policy_type == 1) {
+    int dir_case := 3; // DIR_I
+    int delegato_action := delegatoPT.decideAction(tbe.addr,
+        machineIDToNodeID(tbe.requestor), dir_case,
+        machineIDToNodeID(tbe.dir_owner));
+    DPRINTF(RubySlicc, "Delegato PT (Miss): addr=%#x req=%d action=%d\n",
+            tbe.addr, machineIDToNodeID(tbe.requestor), delegato_action);
+    if (delegato_action == 2) {
+      tbe.reqType := CHIRequestType:ReadUnique;
+      tbe.dataToBeInvalid := true;
+      tbe.actions.push(Event:SendReadNoSnp);
+      tbe.actions.push(Event:WaitCompAck);
+      tbe.actions.pushNB(Event:SendCompData);
+      tbe.actions.pushNB(Event:TagArrayWrite);
+      delegato_migrate := true;
+    }
+  }
+  if (delegato_migrate == false) {
+    tbe.actions.push(Event:SendReadNoSnp);
+    tbe.actions.pushNB(Event:WriteFEPipe);
+    tbe.actions.push(Event:SendDBIDResp_AR);
+    tbe.actions.push(Event:SendCompData_AR);
+    tbe.actions.push(Event:DelayAtomic);
+    tbe.actions.push(Event:WriteBEPipe);
+    tbe.actions.push(Event:SendWriteNoSnp);
+    tbe.actions.push(Event:SendWUData);
+    tbe.dataToBeInvalid := true;
+    tbe.actions.pushNB(Event:TagArrayWrite);
+  }
 }
 
 action(Initiate_AtomicNoReturn_Miss_Alloc, desc="") {
@@ -2950,8 +2998,7 @@ action(UpdateDataState_FromWUDataResp, desc="") {
 
 action(UpdateDataState_FromADataResp, desc="") {
   assert(is_valid(tbe));
-  if (((is_HN && (tbe.is_delegato_migrate == false)) ||
-       (is_AAN && tbe.is_aan_hit)) &&
+  if ((is_HN || (is_AAN && tbe.is_aan_hit)) &&
       (tbe.expected_req_resp.hasReceivedData()) &&
       ((tbe.reqType == CHIRequestType:AtomicReturn) ||
        (tbe.reqType == CHIRequestType:AtomicNoReturn))) {
@@ -3622,8 +3669,7 @@ action(Send_Data, desc="") {
     tbe.snd_pendBytes.setMask(offset, range, false);
 
     if ((tbe.reqType == CHIRequestType:AtomicReturn) &&
-        (tbe.atomic_to_be_wb == false) &&
-        !(is_HN && tbe.is_delegato_migrate)){
+        (tbe.atomic_to_be_wb == false)){
         out_msg.dataBlk := tbe.oldDataBlk;
     } else if (tbe.is_snp_amo && tbe.is_snp_amo_return) {
         // Delegato SnpAMO: send pre-atomic old data to requester
@@ -5014,32 +5060,4 @@ action(Forward_SnpAMOResp, desc="Delegato: Forward upstream SnpAMO completion") 
   }
 }
 
-// Delegato Migrate: HN-F sends CompData with UD ownership to requester.
-// The requester L2 receives CompData_UD_PD and executes the AMO locally.
-// Unlike Centralize, HN-F does NOT execute the AMO — data is sent as-is.
-action(Send_MigrateCompData, desc="Delegato: HN-F sends CompData_UD_PD to requester (Migrate)") {
-  assert(is_valid(tbe));
-  assert(is_HN);
-  assert(tbe.dataValid);
 
-  DPRINTF(RubySlicc, "Delegato Migrate: sending CompData_UD_PD to requester %d addr=%#x\n",
-          machineIDToNodeID(tbe.requestor), tbe.addr);
-
-  // Force CompData_UD_PD: data with Unique Dirty ownership
-  if (tbe.dataDirty) {
-    tbe.snd_msgType := CHIDataType:CompData_UD_PD;
-  } else {
-    tbe.snd_msgType := CHIDataType:CompData_UC;
-  }
-
-  // Directory update: requester becomes the new exclusive owner
-  if (directory.isTagPresent(address) == false) {
-    directory.allocate(address);
-  }
-  tbe.dataMaybeDirtyUpstream := true;
-  tbe.requestorToBeExclusiveOwner := true;
-
-  tbe.snd_destination := tbe.requestor;
-  setupPendingSend(tbe);
-  printTBEState(tbe);
-}

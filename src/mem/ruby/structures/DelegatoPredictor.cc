@@ -307,24 +307,21 @@ DelegatoPredictorTable::decideAction(
 
     touchLRU(*entry);
 
-    int policy = entry->policy_state;
-
-    // Same-requester repeat → upgrade CA/PC to PO, action = Migrate.
-    // Paper Figure 6b: CA/PC + same_req → PO.
-    // No has_owner guard: whether Migrate is physically executable
-    // is decided by the HN-F action layer, not the predictor.
+    // Same-requester repeat → upgrade CA/PC to PO (Paper Figure 6b).
+    // According to section 5.3, when same NodeID amo repeat on the same address,
+    // use Migrate by force. 
     if (entry->has_last_req && entry->last_req_id == req_id &&
-        (policy == STATE_CA || policy == STATE_PC)) {
+        (entry->policy_state == STATE_CA ||
+         entry->policy_state == STATE_PC)) {
         entry->policy_state = STATE_PO;
-        entry->last_req_id = req_id;
-        return ACTION_MIGRATE;
+        return ACTION_MIGRATE; 
     }
 
-    // Update last_req_id for next comparison
     entry->last_req_id = req_id;
     entry->has_last_req = true;
 
-    return mapPolicyToAction(policy, dir_case, req_local, owner_local);
+    return mapPolicyToAction(entry->policy_state, dir_case,
+                             req_local, owner_local);
 }
 
 void

@@ -587,8 +587,6 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     ExecuteSnpAMO,            desc="Delegato: Owner executes AMO after NCBWrData";
     SendSnpAMOResp,           desc="Delegato: Owner sends SnpResp_AMO to HN-F with reuse_bit";
     SendSnpAMONoFwdResp,      desc="Delegato: Owner sends SnpResp_AMO_NoFwd to HN-F (AtomicNoReturn)";
-    // Delegato Migrate: HN-F sends CompData with ownership to requester
-    SendMigrateCompData,      desc="Delegato: HN-F sends CompData_UD_PD to requester (Migrate)";
     // Snoop responses
     SendSnpData,                      desc="Send SnpRespData as snoop reply";
     SendSnpIResp,                     desc="Send SnpResp_I as snoop reply";

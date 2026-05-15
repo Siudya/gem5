@@ -1400,12 +1400,6 @@ transition(BUSY_BLKD, SendSnpAMO) {
   ProcessNextState_ClearPending;
 }
 
-transition(BUSY_BLKD, SendMigrateCompData) {
-  Pop_TriggerQueue;
-  Send_MigrateCompData;
-  ProcessNextState_ClearPending;
-}
-
 transition(BUSY_BLKD, SendCompDBIDResp) {
   Pop_TriggerQueue;
   Send_CompDBIDResp;
