@@ -1270,15 +1270,13 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
     DPRINTF(RubySlicc, "Delegato PT (PoC): addr=%#x req=%d dir_case=%d action=%d\n",
             tbe.addr, machineIDToNodeID(tbe.requestor), dir_case, delegato_action);
 
-    // Delegate: single exclusive owner, send SnpAMO instead of SnpUnique
+    // Delegate: single owner, send SnpAMO
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
-        tbe.dir_ownerIsExcl &&
         (tbe.dir_owner != tbe.requestor) &&
-        (tbe.dir_sharers.count() == 1) && tbe.dataMaybeDirtyUpstream) {
+        (tbe.dir_sharers.count() == 1)) {
       DPRINTF(RubySlicc, "Delegato: AtomicReturn PoC Delegate to owner %d\n",
               tbe.dir_owner);
       tbe.actions.push(Event:SendSnpAMO);
-      tbe.actions.pushNB(Event:TagArrayWrite);
       tbe.dataToBeInvalid := true;
       delegato_handled := true;
     }
@@ -1338,13 +1336,11 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
         machineIDToNodeID(tbe.requestor), dir_case,
         machineIDToNodeID(tbe.dir_owner));
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
-        tbe.dir_ownerIsExcl &&
         (tbe.dir_owner != tbe.requestor) &&
-        (tbe.dir_sharers.count() == 1) && tbe.dataMaybeDirtyUpstream) {
+        (tbe.dir_sharers.count() == 1)) {
       DPRINTF(RubySlicc, "Delegato: AtomicReturn WriteBack Delegate to owner %d\n",
               tbe.dir_owner);
       tbe.actions.push(Event:SendSnpAMO);
-      tbe.actions.pushNB(Event:TagArrayWrite);
       tbe.dataToBeInvalid := true;
       delegato_handled := true;
     }
@@ -1410,13 +1406,11 @@ action(Initiate_AtomicNoReturn_LocalWrite, desc="") {
 
     // Delegate: single exclusive owner, send SnpAMO (no data return to requester)
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
-        tbe.dir_ownerIsExcl &&
         (tbe.dir_owner != tbe.requestor) &&
-        (tbe.dir_sharers.count() == 1) && tbe.dataMaybeDirtyUpstream) {
+        (tbe.dir_sharers.count() == 1)) {
       DPRINTF(RubySlicc, "Delegato: AtomicNoReturn PoC Delegate to owner %d\n",
               tbe.dir_owner);
       tbe.actions.push(Event:SendSnpAMO);
-      tbe.actions.pushNB(Event:TagArrayWrite);
       tbe.dataToBeInvalid := true;
       delegato_handled := true;
     }
@@ -1460,13 +1454,11 @@ action(Initiate_AtomicNoReturn_WriteBack, desc="") {
         machineIDToNodeID(tbe.requestor), dir_case,
         machineIDToNodeID(tbe.dir_owner));
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
-        tbe.dir_ownerIsExcl &&
         (tbe.dir_owner != tbe.requestor) &&
-        (tbe.dir_sharers.count() == 1) && tbe.dataMaybeDirtyUpstream) {
+        (tbe.dir_sharers.count() == 1)) {
       DPRINTF(RubySlicc, "Delegato: AtomicNoReturn WriteBack Delegate to owner %d\n",
               tbe.dir_owner);
       tbe.actions.push(Event:SendSnpAMO);
-      tbe.actions.pushNB(Event:TagArrayWrite);
       tbe.dataToBeInvalid := true;
       delegato_handled := true;
     }
