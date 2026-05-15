@@ -581,7 +581,10 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     SendSnpCleanInvalidNoReq, desc="Send a SnpCleanInvalid to all sharers except requestor";
     SendSnpAMO,               desc="Delegato: Send SnpAMO to owner carrying atomic op";
     // SnpAMO owner-side response events
-    SendSnpAMOCompData,       desc="Delegato: Owner executes AMO & sends old data to fwdRequestor";
+    SendSnpAMOCompData,       desc="Delegato: Owner sends old data to fwdRequestor";
+    SendSnpAMODBIDResp,       desc="Delegato: Owner sends DBIDResp to fwdRequestor";
+    SendSnpAMOCompDBIDResp,   desc="Delegato: Owner sends CompDBIDResp to fwdRequestor";
+    ExecuteSnpAMO,            desc="Delegato: Owner executes AMO after NCBWrData";
     SendSnpAMOResp,           desc="Delegato: Owner sends SnpResp_AMO to HN-F with reuse_bit";
     SendSnpAMONoFwdResp,      desc="Delegato: Owner sends SnpResp_AMO_NoFwd to HN-F (AtomicNoReturn)";
     // Delegato Migrate: HN-F sends CompData with ownership to requester
@@ -816,6 +819,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     // AAN hit/fill: set when AAN executes atomic locally
     bool is_aan_hit, default="false", desc="AAN: executing atomic locally (hit or fill path)";
     bool aan_fill_read_unique, default="false", desc="AAN fill: downstream ownership is fetched with ReadUnique";
+    bool is_delegato_migrate, default="false", desc="Delegato: requester received unique data for local AtomicReturn";
     // AAN AtomicReturn early CompData at RN-F.
     bool early_ar_compdata_mode, default="false", desc="RN-F: AAN AtomicReturn may receive CompData_I before NCBWrData is sent";
     bool early_ar_compdata_received, default="false", desc="RN-F: full early AtomicReturn CompData_I old value has arrived";

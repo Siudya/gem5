@@ -569,6 +569,8 @@ TBE allocateSnoopTBE(Addr addr, CHIRequestMsg in_msg), return_by_pointer="yes" {
   // Delegato: extract atomic operation for SnpAMO
   if (in_msg.type == CHIRequestType:SnpAMO) {
     tbe.is_snp_amo := true;
+    tbe.accAddr := in_msg.accAddr;
+    tbe.accSize := in_msg.accSize;
     tbe.atomic_op := in_msg.atomic_op;
     tbe.is_snp_amo_return := in_msg.retToSrc;
     DPRINTF(RubySlicc, "allocateSnoopTBE: SnpAMO addr=%#x fwdReq=%d return=%d\n",
@@ -1578,6 +1580,37 @@ bool _checkResourceAvailable(RequestType request_type, Addr addr) {
     error("Invalid RequestType type in checkResourceAvailable");
     return true;
   }
+}
+
+// Delegato: compute reuse_bit for SnpResp_AMO / SnpResp_AMO_NoFwd.
+// Reuse signal combines three sources:
+//   1) upstream_unique — L1D still holds Unique line
+//   2) live_reuse       — L2 live counter records sustained AMO traffic
+//   3) rt_spill_reuse   — eviction-spill from DelegatoReuseTable
+// Side effect: resets cache_entry.amoReuseCount when cache_entry is valid.
+bool computeSnpAMOReuseBit(TBE tbe, CacheEntry cache_entry) {
+  assert(is_valid(tbe));
+  assert(tbe.is_snp_amo);
+  assert(is_valid(cache_entry) || (tbe.dir_ownerExists && tbe.dir_ownerIsExcl));
+
+  bool upstream_unique := tbe.dir_ownerExists && tbe.dir_ownerIsExcl;
+
+  bool live_reuse := false;
+  if (is_valid(cache_entry)) {
+    assert(cache_entry.amoReuseCount >= 0);
+    assert(cache_entry.amoReuseCount <= 3);
+    live_reuse := (cache_entry.amoReuseCount >= 2);
+  }
+
+  bool rt_spill_reuse := delegatoRT.queryAndResetReuse(tbe.addr, false);
+
+  bool reuse_bit := upstream_unique || live_reuse || rt_spill_reuse;
+
+  if (is_valid(cache_entry)) {
+    cache_entry.amoReuseCount := 0;
+  }
+
+  return reuse_bit;
 }
 
 bool checkResourceAvailable(RequestType request_type, Addr addr) {

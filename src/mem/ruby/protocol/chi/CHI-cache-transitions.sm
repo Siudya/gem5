@@ -953,8 +953,9 @@ transition(BUSY_INTR, {SnpOnce,SnpOnceFwd}, BUSY_BLKD) {
 }
 
 // SnpAMO (Delegato: owner executes atomic in place, keeps ownership)
-// Only valid when owner has Unique data (UD, UC, and their sub-states)
-transition({UD,UC,UD_RSC,UC_RSC,UD_RU,UC_RU,UD_RSD},
+// Valid when this cache has Unique data or is the directory owner for an
+// upstream Unique holder; the latter forwards SnpAMO to the real owner.
+transition({UD,UC,UD_RSC,UC_RSC,UD_RU,UC_RU,UD_RSD,RU},
            SnpAMO, BUSY_BLKD) {
   Initiate_Snoop;
   Initiate_SnpAMO;
@@ -1202,6 +1203,24 @@ transition(BUSY_BLKD, SendSnpAMOCompData) {
   ProcessNextState_ClearPending;
 }
 
+transition(BUSY_BLKD, SendSnpAMODBIDResp) {
+  Pop_TriggerQueue;
+  Send_SnpAMODBIDResp;
+  ProcessNextState_ClearPending;
+}
+
+transition(BUSY_BLKD, SendSnpAMOCompDBIDResp) {
+  Pop_TriggerQueue;
+  Send_SnpAMOCompDBIDResp;
+  ProcessNextState_ClearPending;
+}
+
+transition(BUSY_BLKD, ExecuteSnpAMO) {
+  Pop_TriggerQueue;
+  Execute_SnpAMO;
+  ProcessNextState_ClearPending;
+}
+
 transition(BUSY_BLKD, SendSnpAMOResp) {
   Pop_TriggerQueue;
   Send_SnpAMOResp;
@@ -1214,7 +1233,7 @@ transition(BUSY_BLKD, SendSnpAMONoFwdResp) {
   ProcessNextState_ClearPending;
 }
 
-transition(BUSY_BLKD, SendCompAck) {
+transition({BUSY_BLKD,BUSY_INTR}, SendCompAck) {
   Pop_TriggerQueue;
   Send_CompAck;
   ProcessNextState_ClearPending;
@@ -1426,7 +1445,7 @@ transition(BUSY_BLKD, SendCompDBIDResp_ANR) {
   ProcessNextState_ClearPending;
 }
 
-transition(BUSY_BLKD, SendDBIDResp_AR) {
+transition({BUSY_BLKD,BUSY_INTR}, SendDBIDResp_AR) {
   Pop_TriggerQueue;
   ExpectNCBWrData_A;
   Send_DBIDResp;
@@ -1500,6 +1519,7 @@ transition({BUSY_BLKD,BUSY_INTR}, NCBWrData) {
   Receive_ReqDataResp;
   UpdateDataState_FromWUDataResp;
   UpdateDataState_FromADataResp;
+  Queue_SnpAMOCompletionAfterNCBWrData;
   Pop_DataInQueue;
   ProcessNextState;
 }
@@ -1632,6 +1652,7 @@ transition(BUSY_BLKD,
 transition(BUSY_BLKD, SnpResp_AMO) {
   Receive_SnpResp_AMO;
   UpdateDirState_FromSnpResp;
+  Forward_SnpAMOResp;
   Pop_RespInQueue;
   ProcessNextState;
 }
@@ -1639,6 +1660,7 @@ transition(BUSY_BLKD, SnpResp_AMO) {
 transition(BUSY_BLKD, SnpResp_AMO_NoFwd) {
   Receive_SnpResp_AMO;
   UpdateDirState_FromSnpResp;
+  Forward_SnpAMOResp;
   Pop_RespInQueue;
   ProcessNextState;
 }
@@ -1685,7 +1707,7 @@ transition(BUSY_BLKD, Comp) {
   ProcessNextState;
 }
 
-transition(BUSY_BLKD, TX_Data) {
+transition({BUSY_BLKD,BUSY_INTR}, TX_Data) {
   Pop_TriggerQueue;
   Send_Data;
   Callback_EarlyAtomicReturn;
