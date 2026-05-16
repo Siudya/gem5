@@ -1272,6 +1272,7 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
 
     // Delegate: single owner, send SnpAMO
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
+        tbe.dir_ownerIsExcl &&
         (tbe.dir_owner != tbe.requestor) &&
         (tbe.dir_sharers.count() == 1)) {
       DPRINTF(RubySlicc, "Delegato: AtomicReturn PoC Delegate to owner %d\n",
@@ -1279,9 +1280,13 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
       tbe.actions.push(Event:SendSnpAMO);
       tbe.dataToBeInvalid := true;
       delegato_handled := true;
+    } else if (delegato_action == 1) {
+      // PT predicted Delegate but owner==requestor or sharers>1; fall through
+      assert(tbe.dir_ownerExists && tbe.dir_ownerIsExcl);
+      DPRINTF(RubySlicc, "WARNING: Delegate fallback to Centralize addr=%#x req=%d owner=%d sharers=%d\n",
+              tbe.addr, machineIDToNodeID(tbe.requestor),
+              machineIDToNodeID(tbe.dir_owner), tbe.dir_sharers.count());
     }
-
-    // Migrate: reuse ReadUnique flow — send CompData_UC/UD_PD to requester
     if ((delegato_handled == false) && (delegato_action == 2)) {
       DPRINTF(RubySlicc, "Delegato: AtomicReturn PoC Migrate to requester %d\n",
               machineIDToNodeID(tbe.requestor));
@@ -1339,6 +1344,7 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
         machineIDToNodeID(tbe.requestor), dir_case,
         machineIDToNodeID(tbe.dir_owner));
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
+        tbe.dir_ownerIsExcl &&
         (tbe.dir_owner != tbe.requestor) &&
         (tbe.dir_sharers.count() == 1)) {
       DPRINTF(RubySlicc, "Delegato: AtomicReturn WriteBack Delegate to owner %d\n",
@@ -1346,6 +1352,8 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
       tbe.actions.push(Event:SendSnpAMO);
       tbe.dataToBeInvalid := true;
       delegato_handled := true;
+    } else if (delegato_action == 1) {
+      error("Delegate precondition violated: owner must be exclusive, single sharer, not requestor");
     }
 
     // Migrate: reuse ReadUnique flow
@@ -1412,6 +1420,7 @@ action(Initiate_AtomicNoReturn_LocalWrite, desc="") {
 
     // Delegate: single exclusive owner, send SnpAMO (no data return to requester)
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
+        tbe.dir_ownerIsExcl &&
         (tbe.dir_owner != tbe.requestor) &&
         (tbe.dir_sharers.count() == 1)) {
       DPRINTF(RubySlicc, "Delegato: AtomicNoReturn PoC Delegate to owner %d\n",
@@ -1419,6 +1428,8 @@ action(Initiate_AtomicNoReturn_LocalWrite, desc="") {
       tbe.actions.push(Event:SendSnpAMO);
       tbe.dataToBeInvalid := true;
       delegato_handled := true;
+    } else if (delegato_action == 1) {
+      error("Delegate precondition violated: owner must be exclusive, single sharer, not requestor");
     }
     // Migrate not supported for AtomicNoReturn (protocol mismatch).
     // Falls through to Centralize.
@@ -1460,6 +1471,7 @@ action(Initiate_AtomicNoReturn_WriteBack, desc="") {
         machineIDToNodeID(tbe.requestor), dir_case,
         machineIDToNodeID(tbe.dir_owner));
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
+        tbe.dir_ownerIsExcl &&
         (tbe.dir_owner != tbe.requestor) &&
         (tbe.dir_sharers.count() == 1)) {
       DPRINTF(RubySlicc, "Delegato: AtomicNoReturn WriteBack Delegate to owner %d\n",
@@ -1467,6 +1479,8 @@ action(Initiate_AtomicNoReturn_WriteBack, desc="") {
       tbe.actions.push(Event:SendSnpAMO);
       tbe.dataToBeInvalid := true;
       delegato_handled := true;
+    } else if (delegato_action == 1) {
+      error("Delegate precondition violated: owner must be exclusive, single sharer, not requestor");
     }
     // Migrate not supported for AtomicNoReturn (protocol mismatch).
     // Falls through to Centralize.
@@ -1544,16 +1558,32 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       tbe.actions.push(Event:SendAtomicReturn_AANTransparentBypass);
     }
   } else {
-    // Non-AAN (L2): forward to HNF with deferred branching.
-    // Action queue built dynamically by response handlers:
-    //   DBIDResp → non-migrate (pass-through)
-    //   CompData_UC/UD → migrate (execute locally)
+    // Non-AAN (L2)
     if (is_valid(cache_entry) && (cache_entry.amoReuseCount < 3)) {
       cache_entry.amoReuseCount := cache_entry.amoReuseCount + 1;
     }
-    tbe.actions.push(Event:SendAtomicReturn);
-    tbe.dataToBeInvalid := true;
-    tbe.doCacheFill := false;
+
+    if (tbe.dataValid && tbe.dataUnique && !tbe.dataMaybeDirtyUpstream &&
+        tbe.dir_sharers.isEmpty()) {
+      // L2 has Unique data (UD/UC) with no upstream holders: execute locally
+      tbe.actions.push(Event:DataArrayRead);
+      tbe.actions.push(Event:SendDBIDResp_AR);
+      tbe.actions.push(Event:SendCompData_AR);
+      tbe.actions.push(Event:DelayAtomic);
+      tbe.actions.push(Event:CheckCacheFill);
+      tbe.actions.push(Event:WriteBEPipe);
+      tbe.actions.push(Event:TagArrayWrite);
+      tbe.dataToBeInvalid := false;
+      tbe.doCacheFill := true;
+    } else {
+      // Forward to HNF with deferred branching.
+      // Action queue built dynamically by response handlers:
+      //   DBIDResp → non-migrate (pass-through)
+      //   CompData_UC/UD → migrate (execute locally)
+      tbe.actions.push(Event:SendAtomicReturn);
+      tbe.dataToBeInvalid := true;
+      tbe.doCacheFill := false;
+    }
   }
 }
 
@@ -4621,14 +4651,14 @@ action(FillPipe, desc="") {
 action(DelayAtomic, desc="") {
   assert(is_valid(tbe));
   tbe.delayNextAction := curTick() + cyclesToTicks(atomic_op_latency);
-  // Delegato Migrate at L2: execute atomic after delay.
-  // dataBlk still holds old value (already sent as CompData_AR to L1).
-  if (tbe.is_delegato_migrate) {
-    DPRINTF(RubySlicc, "Delegato Migrate DelayAtomic: executing AMO addr=%#x\n", tbe.addr);
-    DPRINTF(RubySlicc, "Migrate before %s\n", tbe.dataBlk);
+  // Execute atomic after delay for Migrate and Delegate paths.
+  // dataBlk holds old value (already sent as CompData to requester).
+  if (tbe.is_delegato_migrate || tbe.is_snp_amo) {
+    DPRINTF(RubySlicc, "DelayAtomic: executing AMO addr=%#x\n", tbe.addr);
+    DPRINTF(RubySlicc, "Before %s\n", tbe.dataBlk);
     tbe.dataBlk.atomicPartial(tbe.dataBlk, tbe.atomic_op);
     tbe.dataBlk.clearAtomicLogEntries();
-    DPRINTF(RubySlicc, "Migrate after %s\n", tbe.dataBlk);
+    DPRINTF(RubySlicc, "After %s\n", tbe.dataBlk);
     tbe.dataDirty := true;
   }
 }
@@ -4885,36 +4915,50 @@ action(Initiate_SnpAMO, desc="Delegato: Owner executes atomic in place on SnpAMO
   assert(tbe.is_snp_amo);
 
   if (tbe.dataValid) {
-    // Read the cache data
+    // Owner has data locally (UD/UC): read data, get operand, execute, respond
     tbe.actions.push(Event:DataArrayRead);
-
-    if (tbe.is_snp_amo_return) {
-      tbe.actions.push(Event:SendSnpAMODBIDResp);
-    } else {
-      tbe.actions.push(Event:SendSnpAMOCompDBIDResp);
+    tbe.actions.push(Event:SendSnpAMODBIDResp);
+    // After NCBWrData arrives: send old value, execute atomic, write back
+    tbe.actions.push(Event:SendSnpAMOCompData);
+    tbe.actions.push(Event:DelayAtomic);
+    tbe.actions.push(Event:DataArrayWrite);
+    tbe.actions.push(Event:SendSnpAMOResp);
+    if (tbe.is_req_hazard || tbe.is_repl_hazard) {
+      tbe.actions.push(Event:RestoreFromHazard);
     }
   } else {
+    // Owner is RU: data at upstream L1D. Send DBIDResp and snoop L1D in parallel.
     assert(tbe.dir_ownerExists);
     assert(tbe.dir_ownerIsExcl);
     assert(tbe.dir_sharers.count() == 1);
-    tbe.actions.push(Event:SendSnpAMO);
+    // Both NB so they execute without waiting for each other
+    tbe.actions.pushNB(Event:SendSnpAMODBIDResp);
+    tbe.actions.pushNB(Event:SendSnpUniqueRetToSrc);
+    // After both NCBWrData + SnpRespData arrive:
+    tbe.actions.push(Event:SendSnpAMOCompData);
+    tbe.actions.push(Event:DelayAtomic);
+    tbe.actions.push(Event:CheckCacheFill);
+    tbe.actions.push(Event:TagArrayWrite);
+    tbe.actions.push(Event:SendSnpAMOResp);
+    if (tbe.is_req_hazard || tbe.is_repl_hazard) {
+      tbe.actions.push(Event:RestoreFromHazard);
+    }
   }
 
   // Owner keeps data — no invalidation
+  tbe.doCacheFill := true;
   tbe.dataToBeInvalid := false;
 }
 
-// Owner-side: save old data and send CompData_I to fwdRequestor (requester)
+// Owner-side: send old data as CompData_I to fwdRequestor (requester)
 action(Send_SnpAMOCompData, desc="Delegato: Owner sends old data to requester") {
   assert(is_valid(tbe));
   assert(tbe.dataValid);
   assert(tbe.is_snp_amo);
-  assert(tbe.is_snp_amo_return);
 
-  // Send old data to fwdRequestor (the original requester) as CompData_I
-  // The requester receives the old value but does NOT get ownership.
-  // Use setupPendingSend to respect data_channel_size fragmentation;
-  // Send_Data will use tbe.oldDataBlk because tbe.is_snp_amo_return is set.
+  // Save old data before atomic execution (DelayAtomic comes after this action)
+  tbe.oldDataBlk := tbe.dataBlk;
+  // Send_Data uses tbe.oldDataBlk when is_snp_amo && is_snp_amo_return
   tbe.snd_msgType := CHIDataType:CompData_I;
   tbe.fwdedState := State:I;
   tbe.snd_destination := tbe.fwdRequestor;
@@ -4966,29 +5010,6 @@ action(Send_SnpAMOCompDBIDResp, desc="Delegato: Owner sends CompDBIDResp to requ
   tbe.expected_req_resp.clear(num_msgs);
   tbe.expected_req_resp.addExpectedDataType(CHIDataType:NCBWrData);
   tbe.expected_req_resp.setExpectedCount(1);
-}
-
-// Owner-side: NCBWrData completed the requester/owner handshake. Queue local
-// RMW and HN-F completion now, keeping SnpResp after the cache update.
-action(Queue_SnpAMOCompletionAfterNCBWrData, desc="Delegato: Queue SnpAMO completion after NCBWrData") {
-  assert(is_valid(tbe));
-  if (tbe.is_snp_amo && tbe.expected_req_resp.hasReceivedData()) {
-    tbe.actions.push(Event:DelayAtomic);
-    tbe.actions.push(Event:ExecuteSnpAMO);
-    tbe.doCacheFill := true;
-    tbe.actions.push(Event:DataArrayWrite);
-    if (tbe.is_snp_amo_return) {
-      tbe.actions.push(Event:SendSnpAMOCompData);
-      tbe.actions.push(Event:SendSnpAMOResp);
-    } else {
-      tbe.actions.push(Event:SendSnpAMONoFwdResp);
-    }
-    if (tbe.is_req_hazard || tbe.is_repl_hazard) {
-      tbe.actions.push(Event:RestoreFromHazard);
-    } else {
-      tbe.actions.pushNB(Event:TagArrayWrite);
-    }
-  }
 }
 
 // Owner-side: execute atomic after requester NCBWrData has arrived.

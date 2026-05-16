@@ -1197,19 +1197,19 @@ transition(BUSY_BLKD, SendSnpFwdedResp) {
 }
 
 // Delegato SnpAMO trigger events (owner-side)
-transition(BUSY_BLKD, SendSnpAMOCompData) {
+transition({BUSY_BLKD, BUSY_INTR}, SendSnpAMOCompData) {
   Pop_TriggerQueue;
   Send_SnpAMOCompData;
   ProcessNextState_ClearPending;
 }
 
-transition(BUSY_BLKD, SendSnpAMODBIDResp) {
+transition({BUSY_BLKD, BUSY_INTR}, SendSnpAMODBIDResp) {
   Pop_TriggerQueue;
   Send_SnpAMODBIDResp;
   ProcessNextState_ClearPending;
 }
 
-transition(BUSY_BLKD, SendSnpAMOCompDBIDResp) {
+transition({BUSY_BLKD, BUSY_INTR}, SendSnpAMOCompDBIDResp) {
   Pop_TriggerQueue;
   Send_SnpAMOCompDBIDResp;
   ProcessNextState_ClearPending;
@@ -1221,13 +1221,13 @@ transition(BUSY_BLKD, ExecuteSnpAMO) {
   ProcessNextState_ClearPending;
 }
 
-transition(BUSY_BLKD, SendSnpAMOResp) {
+transition({BUSY_BLKD, BUSY_INTR}, SendSnpAMOResp) {
   Pop_TriggerQueue;
   Send_SnpAMOResp;
   ProcessNextState_ClearPending;
 }
 
-transition(BUSY_BLKD, SendSnpAMONoFwdResp) {
+transition({BUSY_BLKD, BUSY_INTR}, SendSnpAMONoFwdResp) {
   Pop_TriggerQueue;
   Send_SnpAMONoFwdResp;
   ProcessNextState_ClearPending;
@@ -1513,7 +1513,6 @@ transition({BUSY_BLKD,BUSY_INTR}, NCBWrData) {
   Receive_ReqDataResp;
   UpdateDataState_FromWUDataResp;
   UpdateDataState_FromADataResp;
-  Queue_SnpAMOCompletionAfterNCBWrData;
   Pop_DataInQueue;
   ProcessNextState;
 }
