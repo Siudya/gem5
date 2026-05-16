@@ -1287,6 +1287,9 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
               machineIDToNodeID(tbe.requestor));
       tbe.reqType := CHIRequestType:ReadUnique;
       tbe.dataToBeInvalid := true;
+      if (directory.isTagPresent(address) == false) {
+        directory.allocate(address);
+      }
       if (!tbe.dataValid && (tbe.dir_sharers.count() == 0)) {
         tbe.actions.push(Event:SendReadNoSnp);
       } else if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl && tbe.dataMaybeDirtyUpstream) {
@@ -1351,6 +1354,9 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
               machineIDToNodeID(tbe.requestor));
       tbe.reqType := CHIRequestType:ReadUnique;
       tbe.dataToBeInvalid := true;
+      if (directory.isTagPresent(address) == false) {
+        directory.allocate(address);
+      }
       if (!tbe.dataValid && (tbe.dir_sharers.count() == 0)) {
         tbe.actions.push(Event:SendReadNoSnp);
       } else if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl && tbe.dataMaybeDirtyUpstream) {
@@ -1538,19 +1544,30 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       tbe.actions.push(Event:SendAtomicReturn_AANTransparentBypass);
     }
   } else {
-    // Non-AAN (L2): forward to HNF
-    // Delegato fix_2: track AMO traffic through this L2 (owner-side usage)
+    // Non-AAN (L2): forward to HNF with deferred branching.
+    // Action queue built dynamically by response handlers:
+    //   DBIDResp → non-migrate (pass-through)
+    //   CompData_UC/UD → migrate (execute locally)
     if (is_valid(cache_entry) && (cache_entry.amoReuseCount < 3)) {
       cache_entry.amoReuseCount := cache_entry.amoReuseCount + 1;
     }
     tbe.actions.push(Event:SendAtomicReturn);
-    tbe.actions.pushNB(Event:WriteFEPipe);
+    tbe.dataToBeInvalid := true;
+    tbe.doCacheFill := false;
+  }
+}
+
+action(Branch_AtomicReturn_Forward, desc="") {
+  // L2 deferred branching: DBIDResp arrived → non-migrate path.
+  if (!is_HN && !is_AAN &&
+      (tbe.reqType == CHIRequestType:AtomicReturn) &&
+      !tbe.is_delegato_migrate) {
+    tbe.expected_req_resp.setExpectedCount(tbe.expected_req_resp.received());
+    tbe.actions.push(Event:WriteFEPipe);
     tbe.actions.push(Event:SendDBIDResp_AR);
     tbe.actions.push(Event:SendARData);
     tbe.actions.push(Event:SendCompData_AR);
     tbe.actions.push(Event:WriteBEPipe);
-    tbe.actions.pushNB(Event:TagArrayWrite);
-    tbe.dataToBeInvalid := true;
   }
 }
 
@@ -2237,8 +2254,19 @@ action(Send_AtomicReturn, desc="") {
     allowRequestRetry(tbe, out_msg);
   }
   clearExpectedReqResp(tbe);
-  tbe.expected_req_resp.addExpectedRespType(CHIResponseType:DBIDResp);
-  tbe.expected_req_resp.addExpectedCount(1);
+  if (!is_HN && !is_AAN &&
+      (tbe.reqType == CHIRequestType:AtomicReturn)) {
+    // L2 forward: HNF may respond with DBIDResp (non-migrate) or
+    // CompData_UC/UD_PD (migrate). Register both.
+    tbe.expected_req_resp.addExpectedRespType(CHIResponseType:DBIDResp);
+    tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UC);
+    tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UD_PD);
+    tbe.expected_req_resp.addExpectedRespType(CHIResponseType:RespSepData);
+    tbe.expected_req_resp.setExpectedCount(2);
+  } else {
+    tbe.expected_req_resp.addExpectedRespType(CHIResponseType:DBIDResp);
+    tbe.expected_req_resp.addExpectedCount(1);
+  }
 }
 
 action(Send_AtomicReturn_AAN, desc="") {
@@ -3408,12 +3436,10 @@ action(CheckWUComp, desc="") {
 
 action(Send_ARData, desc="") {
   assert(is_valid(tbe));
-  if (tbe.is_delegato_migrate == false) {
-    tbe.snd_msgType := CHIDataType:NCBWrData;
-    assert(tbe.pendReqDest.isEmpty() == false);
-    tbe.snd_destination := tbe.pendReqDest.smallestElement();
-    setupPendingAtomicSend(tbe);
-  }
+  tbe.snd_msgType := CHIDataType:NCBWrData;
+  assert(tbe.pendReqDest.isEmpty() == false);
+  tbe.snd_destination := tbe.pendReqDest.smallestElement();
+  setupPendingAtomicSend(tbe);
 }
 
 action(Send_ANRData, desc="") {
@@ -4333,26 +4359,23 @@ action(Callback_Miss, desc="") {
       assert(tbe.doCacheFill);
       tbe.dataToBeInvalid := false;
     } else {
-      DPRINTF(RubySlicc, "Delegato Migrate at L2: executing AMO locally addr=%#x\n",
-              tbe.addr);
-      DPRINTF(RubySlicc, "Migrate before %s\n", tbe.dataBlk);
+      // Delegato Migrate at L2: CompData_UC/UD arrived for AtomicReturn.
+      // Don't execute atomic yet — send old value (current dataBlk) to L1 first.
+      DPRINTF(RubySlicc, "Delegato Migrate at L2: addr=%#x\n", tbe.addr);
       tbe.oldDataBlk := tbe.dataBlk;
-      tbe.dataBlk.atomicPartial(tbe.dataBlk, tbe.atomic_op);
-      tbe.dataBlk.clearAtomicLogEntries();
-      DPRINTF(RubySlicc, "Migrate after %s\n", tbe.dataBlk);
-      tbe.dataDirty := true;
       tbe.dataToBeInvalid := false;
       tbe.doCacheFill := true;
       tbe.is_delegato_migrate := true;
-      tbe.early_ar_compdata_mode := false;
-      tbe.early_ar_outgoing_profile_active := false;
-      // Delegato fix_3: Migrate completes → line stays at requester L2.
-      // cache_entry may not exist yet (state I before fill); defer seed.
-      assert(tbe.doCacheFill);
-      assert(tbe.seedAmoReuseAfterFill == false);
       tbe.seedAmoReuseAfterFill := true;
-      tbe.actions.pushFront(Event:SendCompAck);
-      tbe.actions.pushFront(Event:CheckCacheFill);
+      // Build migrate action queue:
+      // SendCompAck to HNF, then get operand from L1, send old value,
+      // execute atomic, cache result.
+      tbe.actions.push(Event:SendCompAck);
+      tbe.actions.push(Event:SendDBIDResp_AR);
+      tbe.actions.push(Event:SendCompData_AR);
+      tbe.actions.push(Event:DelayAtomic);
+      tbe.actions.push(Event:CheckCacheFill);
+      tbe.actions.push(Event:TagArrayWrite);
     }
   }
 }
@@ -4598,6 +4621,16 @@ action(FillPipe, desc="") {
 action(DelayAtomic, desc="") {
   assert(is_valid(tbe));
   tbe.delayNextAction := curTick() + cyclesToTicks(atomic_op_latency);
+  // Delegato Migrate at L2: execute atomic after delay.
+  // dataBlk still holds old value (already sent as CompData_AR to L1).
+  if (tbe.is_delegato_migrate) {
+    DPRINTF(RubySlicc, "Delegato Migrate DelayAtomic: executing AMO addr=%#x\n", tbe.addr);
+    DPRINTF(RubySlicc, "Migrate before %s\n", tbe.dataBlk);
+    tbe.dataBlk.atomicPartial(tbe.dataBlk, tbe.atomic_op);
+    tbe.dataBlk.clearAtomicLogEntries();
+    DPRINTF(RubySlicc, "Migrate after %s\n", tbe.dataBlk);
+    tbe.dataDirty := true;
+  }
 }
 
 action(SnpSharedPipe, desc="") {
@@ -5051,5 +5084,3 @@ action(Forward_SnpAMOResp, desc="Delegato: Forward upstream SnpAMO completion") 
     }
   }
 }
-
-

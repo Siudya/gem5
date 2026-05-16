@@ -1689,6 +1689,7 @@ transition(BUSY_INTR, CompDBIDResp, BUSY_BLKD) {
 transition({BUSY_INTR,BUSY_BLKD}, DBIDResp, BUSY_BLKD) {
   Receive_ReqResp;
   Receive_ReqResp_CopyDBID;
+  Branch_AtomicReturn_Forward;
   Receive_ReqResp_WUNeedComp;
   Callback_EarlyAtomicReturn;
   Pop_RespInQueue;
