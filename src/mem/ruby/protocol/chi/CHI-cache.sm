@@ -505,6 +505,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     WriteBEPipe,   desc="Back-end latency of write requests";
     FillPipe,      desc="Cache fill latency";
     DelayAtomic,   desc="Atomic operation latency";
+    DoAtomicLocal, desc="Execute atomic operation locally on L2 data";
     SnpSharedPipe, desc="Latency for SnpShared requests";
     SnpInvPipe,    desc="Latency for SnpUnique and SnpCleanInv requests";
     SnpOncePipe,   desc="Latency for SnpOnce requests";
@@ -548,6 +549,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     SendANRData,               desc="Send atomic no return request data";
     // Atomic handling at the completer
     SendDBIDResp_AR,       desc="Ack AR with DBIDResp and set expected data";
+    PrepareAtomicReturnLocal, desc="Prepare old data for a locally executed AtomicReturn";
     SendCompData_AR,       desc="Ack AR completion";
     SendCompDBIDResp_ANR,  desc="Ack ANR with CompDBIDResp and set expected data";
     SendDBIDResp_ANR,      desc="Ack ANR with DBIDResp and set expected data";

@@ -161,6 +161,12 @@ transition({BUSY_INTR,BUSY_BLKD}, DelayAtomic) {
   ProcessNextState_ClearPending;
 }
 
+transition({BUSY_INTR,BUSY_BLKD}, DoAtomicLocal) {
+  Pop_TriggerQueue;
+  DoAtomicLocal;
+  ProcessNextState_ClearPending;
+}
+
 transition({BUSY_INTR,BUSY_BLKD}, SnpSharedPipe) {
   Pop_TriggerQueue;
   SnpSharedPipe;
@@ -1449,6 +1455,12 @@ transition({BUSY_BLKD,BUSY_INTR}, SendDBIDResp_AR) {
 transition({BUSY_BLKD,BUSY_INTR}, SendCompData_AR) {
   Pop_TriggerQueue;
   Send_CompData_AR;
+  ProcessNextState_ClearPending;
+}
+
+transition(BUSY_BLKD, PrepareAtomicReturnLocal) {
+  Pop_TriggerQueue;
+  Prepare_AtomicReturn_Local;
   ProcessNextState_ClearPending;
 }
 
