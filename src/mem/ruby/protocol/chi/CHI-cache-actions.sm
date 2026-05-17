@@ -1565,7 +1565,7 @@ action(Initiate_AtomicReturn_Forward, desc="") {
 
     if (tbe.dataValid && tbe.dataUnique && !tbe.dataMaybeDirtyUpstream &&
         tbe.dir_sharers.isEmpty()) {
-      // L2 has Unique data (UD/UC) with no upstream holders: execute locally
+      // UD/UC with no upstream holders: execute locally
       tbe.actions.push(Event:DataArrayRead);
       tbe.actions.push(Event:SendDBIDResp_AR);
       tbe.actions.push(Event:SendCompData_AR);
@@ -1575,6 +1575,36 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       tbe.actions.push(Event:TagArrayWrite);
       tbe.dataToBeInvalid := false;
       tbe.doCacheFill := true;
+    } else if (tbe.dataValid && tbe.dataUnique && !tbe.dir_ownerIsExcl &&
+               !tbe.dir_sharers.isEmpty()) {
+      // UC_RSC / UD_RSC / UD_RSD: L2 has Unique data, upstream has SC/SD.
+      // Invalidate upstream, then execute locally.
+      tbe.actions.push(Event:SendSnpCleanInvalid);
+      tbe.actions.push(Event:DataArrayRead);
+      tbe.actions.push(Event:SendDBIDResp_AR);
+      tbe.actions.push(Event:SendCompData_AR);
+      tbe.actions.push(Event:DelayAtomic);
+      tbe.actions.push(Event:CheckCacheFill);
+      tbe.actions.push(Event:WriteBEPipe);
+      tbe.actions.push(Event:TagArrayWrite);
+      tbe.dataToBeInvalid := false;
+      tbe.doCacheFill := true;
+    } else if (!tbe.dataValid && tbe.dataUnique && tbe.dataMaybeDirtyUpstream &&
+               tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
+      // UC_RU / UD_RU / RU: data at upstream L1D with exclusive ownership.
+      // Snoop L1D to get data back, then execute locally.
+      tbe.actions.push(Event:SendSnpUniqueRetToSrc);
+      tbe.actions.push(Event:SendDBIDResp_AR);
+      tbe.actions.push(Event:SendCompData_AR);
+      tbe.actions.push(Event:DelayAtomic);
+      tbe.actions.push(Event:CheckCacheFill);
+      tbe.actions.push(Event:WriteBEPipe);
+      tbe.actions.push(Event:TagArrayWrite);
+      tbe.dataToBeInvalid := false;
+      tbe.doCacheFill := true;
+    } else if (tbe.dataUnique) {
+      // dataUnique but none of the above matched — illegal state
+      error("AtomicReturn_Forward: unexpected Unique state");
     } else {
       // Forward to HNF with deferred branching.
       // Action queue built dynamically by response handlers:
@@ -4914,11 +4944,10 @@ action(Send_SnpAMO, desc="Delegato: Send SnpAMO carrying atomic_op to owner") {
 action(Initiate_SnpAMO, desc="Delegato: Owner executes atomic in place on SnpAMO") {
   assert(tbe.is_snp_amo);
 
-  if (tbe.dataValid) {
-    // Owner has data locally (UD/UC): read data, get operand, execute, respond
+  if (tbe.dataValid && tbe.dir_sharers.isEmpty()) {
+    // Path A: Owner has data locally (UD/UC), no upstream sharers.
     tbe.actions.push(Event:DataArrayRead);
     tbe.actions.push(Event:SendSnpAMODBIDResp);
-    // After NCBWrData arrives: send old value, execute atomic, write back
     tbe.actions.push(Event:SendSnpAMOCompData);
     tbe.actions.push(Event:DelayAtomic);
     tbe.actions.push(Event:DataArrayWrite);
@@ -4926,15 +4955,24 @@ action(Initiate_SnpAMO, desc="Delegato: Owner executes atomic in place on SnpAMO
     if (tbe.is_req_hazard || tbe.is_repl_hazard) {
       tbe.actions.push(Event:RestoreFromHazard);
     }
-  } else {
-    // Owner is RU: data at upstream L1D. Send DBIDResp and snoop L1D in parallel.
-    assert(tbe.dir_ownerExists);
-    assert(tbe.dir_ownerIsExcl);
+  } else if (tbe.dataValid && !tbe.dir_sharers.isEmpty()) {
+    // Path A': Owner has data (UD_RSC/UC_RSC/UD_RSD), upstream has SC/SD.
+    // Invalidate upstream first, then execute.
+    tbe.actions.push(Event:SendSnpCleanInvalid);
+    tbe.actions.push(Event:DataArrayRead);
+    tbe.actions.push(Event:SendSnpAMODBIDResp);
+    tbe.actions.push(Event:SendSnpAMOCompData);
+    tbe.actions.push(Event:DelayAtomic);
+    tbe.actions.push(Event:DataArrayWrite);
+    tbe.actions.push(Event:SendSnpAMOResp);
+    if (tbe.is_req_hazard || tbe.is_repl_hazard) {
+      tbe.actions.push(Event:RestoreFromHazard);
+    }
+  } else if (!tbe.dataValid && tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
+    // Path B: Owner is RU/UC_RU/UD_RU, data at upstream L1D (exclusive).
     assert(tbe.dir_sharers.count() == 1);
-    // Both NB so they execute without waiting for each other
     tbe.actions.pushNB(Event:SendSnpAMODBIDResp);
     tbe.actions.pushNB(Event:SendSnpUniqueRetToSrc);
-    // After both NCBWrData + SnpRespData arrive:
     tbe.actions.push(Event:SendSnpAMOCompData);
     tbe.actions.push(Event:DelayAtomic);
     tbe.actions.push(Event:CheckCacheFill);
@@ -4943,6 +4981,21 @@ action(Initiate_SnpAMO, desc="Delegato: Owner executes atomic in place on SnpAMO
     if (tbe.is_req_hazard || tbe.is_repl_hazard) {
       tbe.actions.push(Event:RestoreFromHazard);
     }
+  } else if (!tbe.dataValid && !tbe.dir_sharers.isEmpty()) {
+    // Path C: RUSC/RUSD — no local data, upstream has SC/SD (non-exclusive).
+    // Snoop upstream to get data, execute, write to cache.
+    tbe.actions.pushNB(Event:SendSnpAMODBIDResp);
+    tbe.actions.pushNB(Event:SendSnpUniqueRetToSrc);
+    tbe.actions.push(Event:SendSnpAMOCompData);
+    tbe.actions.push(Event:DelayAtomic);
+    tbe.actions.push(Event:CheckCacheFill);
+    tbe.actions.push(Event:TagArrayWrite);
+    tbe.actions.push(Event:SendSnpAMOResp);
+    if (tbe.is_req_hazard || tbe.is_repl_hazard) {
+      tbe.actions.push(Event:RestoreFromHazard);
+    }
+  } else {
+    error("Initiate_SnpAMO: unexpected state");
   }
 
   // Owner keeps data — no invalidation

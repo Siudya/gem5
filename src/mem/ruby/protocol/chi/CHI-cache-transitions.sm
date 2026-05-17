@@ -955,7 +955,7 @@ transition(BUSY_INTR, {SnpOnce,SnpOnceFwd}, BUSY_BLKD) {
 // SnpAMO (Delegato: owner executes atomic in place, keeps ownership)
 // Valid when this cache has Unique data or is the directory owner for an
 // upstream Unique holder; the latter forwards SnpAMO to the real owner.
-transition({UD,UC,UD_RSC,UC_RSC,UD_RU,UC_RU,UD_RSD,RU},
+transition({UD,UC,UD_RSC,UC_RSC,UD_RU,UC_RU,UD_RSD,RU,RUSC,RUSD},
            SnpAMO, BUSY_BLKD) {
   Initiate_Snoop;
   Initiate_SnpAMO;
