@@ -1296,7 +1296,16 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
         directory.allocate(address);
       }
       if (!tbe.dataValid && (tbe.dir_sharers.count() == 0)) {
-        tbe.actions.push(Event:SendReadNoSnp);
+        if (tbe.use_DMT) {
+          tbe.requestorToBeExclusiveOwner := true;
+          tbe.dataMaybeDirtyUpstream := true;
+          if (enable_DMT_early_dealloc) {
+            tbe.actions.push(Event:SendRespSepData);
+          }
+          tbe.actions.pushNB(Event:SendReadNoSnpDMT);
+        } else {
+          tbe.actions.push(Event:SendReadNoSnp);
+        }
       } else if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl && tbe.dataMaybeDirtyUpstream) {
         tbe.actions.push(Event:SendSnpUnique);
       } else if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
@@ -1307,7 +1316,9 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
         tbe.actions.push(Event:DataArrayRead);
       }
       tbe.actions.push(Event:WaitCompAck);
-      tbe.actions.pushNB(Event:SendCompData);
+      if (!tbe.use_DMT || tbe.dataValid || (tbe.dir_sharers.count() > 0)) {
+        tbe.actions.pushNB(Event:SendCompData);
+      }
       tbe.actions.pushNB(Event:TagArrayWrite);
       delegato_handled := true;
     }
@@ -1366,7 +1377,16 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
         directory.allocate(address);
       }
       if (!tbe.dataValid && (tbe.dir_sharers.count() == 0)) {
-        tbe.actions.push(Event:SendReadNoSnp);
+        if (tbe.use_DMT) {
+          tbe.requestorToBeExclusiveOwner := true;
+          tbe.dataMaybeDirtyUpstream := true;
+          if (enable_DMT_early_dealloc) {
+            tbe.actions.push(Event:SendRespSepData);
+          }
+          tbe.actions.pushNB(Event:SendReadNoSnpDMT);
+        } else {
+          tbe.actions.push(Event:SendReadNoSnp);
+        }
       } else if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl && tbe.dataMaybeDirtyUpstream) {
         tbe.actions.push(Event:SendSnpUnique);
       } else if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
@@ -1377,7 +1397,9 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
         tbe.actions.push(Event:DataArrayRead);
       }
       tbe.actions.push(Event:WaitCompAck);
-      tbe.actions.pushNB(Event:SendCompData);
+      if (!tbe.use_DMT || tbe.dataValid || (tbe.dir_sharers.count() > 0)) {
+        tbe.actions.pushNB(Event:SendCompData);
+      }
       tbe.actions.pushNB(Event:TagArrayWrite);
       delegato_handled := true;
     }
@@ -1674,9 +1696,18 @@ action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
     if (delegato_action == 2) {
       tbe.reqType := CHIRequestType:ReadUnique;
       tbe.dataToBeInvalid := true;
-      tbe.actions.push(Event:SendReadNoSnp);
+      if (tbe.use_DMT) {
+        tbe.requestorToBeExclusiveOwner := true;
+        tbe.dataMaybeDirtyUpstream := true;
+        if (enable_DMT_early_dealloc) {
+          tbe.actions.push(Event:SendRespSepData);
+        }
+        tbe.actions.pushNB(Event:SendReadNoSnpDMT);
+      } else {
+        tbe.actions.push(Event:SendReadNoSnp);
+        tbe.actions.pushNB(Event:SendCompData);
+      }
       tbe.actions.push(Event:WaitCompAck);
-      tbe.actions.pushNB(Event:SendCompData);
       tbe.actions.pushNB(Event:TagArrayWrite);
       delegato_migrate := true;
     }
