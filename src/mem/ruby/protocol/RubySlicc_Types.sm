@@ -315,7 +315,6 @@ structure(DelegatoPredictorTable, external = "yes") {
 
 structure(AMOStats, external = "yes") {
     void incCoreAtomicLoad();
-    void incCompletedAtomicLoad();
     void incNearL1AMO();
     void incNearL2AMO();
     void incAANHit();

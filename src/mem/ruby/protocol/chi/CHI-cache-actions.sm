@@ -4363,9 +4363,6 @@ action(Callback_AtomicHit, desc="") {
   tbe.dataBlk.clearAtomicLogEntries();
 
   sequencer.atomicCallback(tbe.addr, oldDataBlk, false);
-  if (tbe.reqType == CHIRequestType:AtomicLoad) {
-    amoStats.incCompletedAtomicLoad();
-  }
   DPRINTF(RubySlicc, "Atomic after %s\n", tbe.dataBlk);
   tbe.dataDirty := true;
   if (tbe.reqType == CHIRequestType:AtomicLoad) {
@@ -4416,7 +4413,6 @@ action(Callback_EarlyAtomicReturn, desc="") {
     DPRINTF(RubySlicc, "AAN early AtomicReturn callback old=%s\n",
             tbe.oldDataBlk);
     sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
-    amoStats.incCompletedAtomicLoad();
     tbe.early_ar_callback_done := true;
     outgoingTransactionEnd(address, tbe.rcvdRetryAck);
     tbe.early_ar_outgoing_profile_active := false;
@@ -4472,9 +4468,6 @@ action(Callback_Miss, desc="") {
     tbe.dataBlk.clearAtomicLogEntries();
 
     sequencer.atomicCallback(tbe.addr, oldDataBlk, false);
-    if (tbe.reqType == CHIRequestType:AtomicLoad) {
-      amoStats.incCompletedAtomicLoad();
-    }
     DPRINTF(RubySlicc, "Atomic after %s\n", tbe.dataBlk);
     tbe.dataDirty := true;
     if (tbe.reqType == CHIRequestType:AtomicLoad) {
@@ -4485,7 +4478,6 @@ action(Callback_Miss, desc="") {
              (tbe.early_ar_compdata_mode == false)) {
     DPRINTF(RubySlicc, "Atomic before %s\n", tbe.oldDataBlk);
     sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
-    amoStats.incCompletedAtomicLoad();
 
   // Delegato Migrate at L2: CompData_UD_PD arrived for AtomicReturn.
   // Data is in tbe.dataBlk (UD), AMO not yet executed. Execute locally.

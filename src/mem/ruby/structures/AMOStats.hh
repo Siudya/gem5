@@ -45,7 +45,6 @@ class AMOStats
     {}
 
     void incCoreAtomicLoad() { ++stats.coreAtomicLoad; }
-    void incCompletedAtomicLoad() { ++stats.completedAtomicLoad; }
     void incNearL1AMO() { ++stats.nearL1AMO; }
     void incNearL2AMO() { ++stats.nearL2AMO; }
     void incAANHit() { ++stats.aanHit; }
@@ -63,7 +62,6 @@ class AMOStats
         AMOStatsGroup(statistics::Group *parent)
             : statistics::Group(parent, "amoStats"),
               ADD_STAT(coreAtomicLoad, "Core AtomicLoad requests"),
-              ADD_STAT(completedAtomicLoad, "Completed core AtomicLoad requests"),
               ADD_STAT(nearL1AMO, "Near AMOs executed at L1D with Unique permission"),
               ADD_STAT(nearL2AMO, "Near AMOs executed at L2 with Unique permission"),
               ADD_STAT(aanHit, "AAN AtomicReturn local hits"),
@@ -80,7 +78,6 @@ class AMOStats
         {}
 
         statistics::Scalar coreAtomicLoad;
-        statistics::Scalar completedAtomicLoad;
         statistics::Scalar nearL1AMO;
         statistics::Scalar nearL2AMO;
         statistics::Scalar aanHit;
