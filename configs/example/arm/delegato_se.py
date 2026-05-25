@@ -205,6 +205,12 @@ def create(args):
     cpu_class = cpu_types[args.cpu]
     cpu_class.numThreads = 1
 
+    if args.interp_dir:
+        from m5.core import setInterpDir
+
+        setInterpDir(args.interp_dir)
+        args.interp_dir = None
+
     system = System(
         cpu=[cpu_class(cpu_id=i) for i in range(args.num_cpus)],
         mem_mode=cpu_class.memory_mode(),
@@ -333,6 +339,8 @@ def main():
         parser.error("first --arg must be the workload executable path")
     if args.input and not os.path.isfile(args.input):
         parser.error(f"--input not found: {args.input}")
+    if args.interp_dir and not os.path.isdir(args.interp_dir):
+        parser.error(f"--interp-dir not found: {args.interp_dir}")
     if args.cpu not in cpu_types:
         parser.error("--cpu must be timing, minor, hpi, or o3")
 
