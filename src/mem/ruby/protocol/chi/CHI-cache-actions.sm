@@ -1255,7 +1255,6 @@ action(Initiate_WriteUnique_Forward, desc="") {
 action(Initiate_AtomicReturn_LocalWrite, desc="") {
   // Delegato PredictorTable: record AMO at HN-F (PoC path)
   bool delegato_handled := false;
-  amoStats.incHnfAtomicReturn();
   if (hnf_policy_type == 1) {
     // Compute directory state category for predictor lookup
     int dir_case := 3; // DIR_I
@@ -1329,9 +1328,7 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
   }
 
   if (delegato_handled == false) {
-    if (hnf_policy_type == 1) {
-      amoStats.incCentralize();
-    }
+    amoStats.incCentralize();
     if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
       tbe.actions.push(Event:SendSnpUnique);
     } else if (tbe.dir_sharers.count() > 0){
@@ -1349,7 +1346,6 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
 
 action(Initiate_AtomicReturn_WriteBack, desc="") {
   bool delegato_handled := false;
-  amoStats.incHnfAtomicReturn();
   if (hnf_policy_type == 1) {
     int dir_case := 3;
     if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
@@ -1416,9 +1412,7 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
   }
 
   if (delegato_handled == false) {
-    if (hnf_policy_type == 1) {
-      amoStats.incCentralize();
-    }
+    amoStats.incCentralize();
     if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
       tbe.actions.push(Event:SendSnpUnique);
     } else if (tbe.dir_sharers.count() > 0){
@@ -1707,7 +1701,6 @@ action(Initiate_AtomicNoReturn_Forward, desc="") {
 
 action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
   bool delegato_migrate := false;
-  amoStats.incHnfAtomicReturn();
   if (hnf_policy_type == 1) {
     int dir_case := 3; // DIR_I
     int delegato_action := delegatoPT.decideAction(tbe.addr,
@@ -1736,9 +1729,7 @@ action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
     }
   }
   if (delegato_migrate == false) {
-    if (hnf_policy_type == 1) {
-      amoStats.incCentralize();
-    }
+    amoStats.incCentralize();
     tbe.actions.push(Event:SendReadNoSnp);
     tbe.actions.pushNB(Event:WriteFEPipe);
     tbe.actions.push(Event:SendDBIDResp_AR);
@@ -1752,7 +1743,6 @@ action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
 
 action(Initiate_AtomicReturn_Miss, desc="") {
   bool delegato_migrate := false;
-  amoStats.incHnfAtomicReturn();
   if (hnf_policy_type == 1) {
     int dir_case := 3; // DIR_I
     int delegato_action := delegatoPT.decideAction(tbe.addr,
@@ -1772,9 +1762,7 @@ action(Initiate_AtomicReturn_Miss, desc="") {
     }
   }
   if (delegato_migrate == false) {
-    if (hnf_policy_type == 1) {
-      amoStats.incCentralize();
-    }
+    amoStats.incCentralize();
     tbe.actions.push(Event:SendReadNoSnp);
     tbe.actions.pushNB(Event:WriteFEPipe);
     tbe.actions.push(Event:SendDBIDResp_AR);
@@ -4375,6 +4363,9 @@ action(Callback_AtomicHit, desc="") {
   tbe.dataBlk.clearAtomicLogEntries();
 
   sequencer.atomicCallback(tbe.addr, oldDataBlk, false);
+  if (tbe.reqType == CHIRequestType:AtomicLoad) {
+    amoStats.incCompletedAtomicLoad();
+  }
   DPRINTF(RubySlicc, "Atomic after %s\n", tbe.dataBlk);
   tbe.dataDirty := true;
   if (tbe.reqType == CHIRequestType:AtomicLoad) {
@@ -4425,6 +4416,7 @@ action(Callback_EarlyAtomicReturn, desc="") {
     DPRINTF(RubySlicc, "AAN early AtomicReturn callback old=%s\n",
             tbe.oldDataBlk);
     sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
+    amoStats.incCompletedAtomicLoad();
     tbe.early_ar_callback_done := true;
     outgoingTransactionEnd(address, tbe.rcvdRetryAck);
     tbe.early_ar_outgoing_profile_active := false;
@@ -4480,13 +4472,20 @@ action(Callback_Miss, desc="") {
     tbe.dataBlk.clearAtomicLogEntries();
 
     sequencer.atomicCallback(tbe.addr, oldDataBlk, false);
+    if (tbe.reqType == CHIRequestType:AtomicLoad) {
+      amoStats.incCompletedAtomicLoad();
+    }
     DPRINTF(RubySlicc, "Atomic after %s\n", tbe.dataBlk);
     tbe.dataDirty := true;
+    if (tbe.reqType == CHIRequestType:AtomicLoad) {
+      amoStats.incNearL1AMO();
+    }
   } else if (tbe.dataValid && tbe.dataAMOValid &&
              (tbe.reqType == CHIRequestType:AtomicLoad) &&
              (tbe.early_ar_compdata_mode == false)) {
     DPRINTF(RubySlicc, "Atomic before %s\n", tbe.oldDataBlk);
     sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
+    amoStats.incCompletedAtomicLoad();
 
   // Delegato Migrate at L2: CompData_UD_PD arrived for AtomicReturn.
   // Data is in tbe.dataBlk (UD), AMO not yet executed. Execute locally.

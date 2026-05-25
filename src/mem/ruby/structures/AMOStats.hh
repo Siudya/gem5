@@ -45,7 +45,7 @@ class AMOStats
     {}
 
     void incCoreAtomicLoad() { ++stats.coreAtomicLoad; }
-    void incHnfAtomicReturn() { ++stats.hnfAtomicReturn; }
+    void incCompletedAtomicLoad() { ++stats.completedAtomicLoad; }
     void incNearL1AMO() { ++stats.nearL1AMO; }
     void incNearL2AMO() { ++stats.nearL2AMO; }
     void incAANHit() { ++stats.aanHit; }
@@ -63,7 +63,7 @@ class AMOStats
         AMOStatsGroup(statistics::Group *parent)
             : statistics::Group(parent, "amoStats"),
               ADD_STAT(coreAtomicLoad, "Core AtomicLoad requests"),
-              ADD_STAT(hnfAtomicReturn, "HN-F far AtomicReturn requests"),
+              ADD_STAT(completedAtomicLoad, "Completed core AtomicLoad requests"),
               ADD_STAT(nearL1AMO, "Near AMOs executed at L1D with Unique permission"),
               ADD_STAT(nearL2AMO, "Near AMOs executed at L2 with Unique permission"),
               ADD_STAT(aanHit, "AAN AtomicReturn local hits"),
@@ -71,13 +71,16 @@ class AMOStats
               ADD_STAT(aanFill, "AAN AtomicReturn misses admitted and filled"),
               ADD_STAT(aanBypass, "AAN AtomicReturn misses bypassed to HN-F"),
               ADD_STAT(aanAMO, "AAN local AMO executions"),
-              ADD_STAT(delegate, "Delegato HN-F Delegate actions"),
-              ADD_STAT(migrate, "Delegato HN-F Migrate actions"),
-              ADD_STAT(centralize, "Delegato HN-F Centralize actions")
+              ADD_STAT(delegate, "AMOs delegated by HN-F"),
+              ADD_STAT(migrate, "AMOs migrated by HN-F"),
+              ADD_STAT(centralize, "AMOs centralized at HN-F"),
+              ADD_STAT(placementTotal, "AMOs classified by execution placement",
+                       nearL1AMO + nearL2AMO + centralize + migrate +
+                       delegate + aanAMO)
         {}
 
         statistics::Scalar coreAtomicLoad;
-        statistics::Scalar hnfAtomicReturn;
+        statistics::Scalar completedAtomicLoad;
         statistics::Scalar nearL1AMO;
         statistics::Scalar nearL2AMO;
         statistics::Scalar aanHit;
@@ -88,6 +91,7 @@ class AMOStats
         statistics::Scalar delegate;
         statistics::Scalar migrate;
         statistics::Scalar centralize;
+        statistics::Formula placementTotal;
     } stats;
 };
 
