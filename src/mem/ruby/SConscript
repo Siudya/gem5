@@ -116,6 +116,7 @@ MakeInclude('structures/RubyPrefetcherProxy.hh')
 MakeInclude('structures/DynAMOPredictor.hh')
 MakeInclude('structures/DelegatoReuseTable.hh')
 MakeInclude('structures/DelegatoPredictorTable.hh')
+MakeInclude('structures/AMOStats.hh')
 MakeInclude('structures/AANAdmissionTable.hh')
 MakeInclude('structures/TBEStorage.hh')
 if env['CONF']['RUBY_PROTOCOL_CHI']:

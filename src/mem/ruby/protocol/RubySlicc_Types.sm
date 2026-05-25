@@ -313,6 +313,21 @@ structure(DelegatoPredictorTable, external = "yes") {
     int getState(Addr);
 }
 
+structure(AMOStats, external = "yes") {
+    void incCoreAtomicLoad();
+    void incHnfAtomicReturn();
+    void incNearL1AMO();
+    void incNearL2AMO();
+    void incAANHit();
+    void incAANMiss();
+    void incAANFill();
+    void incAANBypass();
+    void incAANAMO();
+    void incDelegate();
+    void incMigrate();
+    void incCentralize();
+}
+
 // AAN bypass/admission table (BAT): filtered AAN rejects the first lookup of a
 // line and admits later lookups; no-filter AAN admits every lookup.
 structure(AANAdmissionTable, external = "yes") {

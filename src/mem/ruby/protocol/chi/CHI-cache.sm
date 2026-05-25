@@ -928,6 +928,10 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   // Delegato Predictor Table (per HN-F, only active when hnf_policy_type == 1)
   DelegatoPredictorTable delegatoPT, constructor="m_delegato_pt_entries, m_delegato_pt_assoc, m_cache_block_size_bits, m_cores_per_chiplet, m_hnf_chiplet_id";
 
+  // AMO execution/delegation stats. Counts are per controller; nonzero
+  // subsets identify RN-F/L1D, L2/AAN, and HN-F roles.
+  AMOStats amoStats, constructor="this";
+
   // AAN BAT (bypass/admission table): first seen line rejects, later admits.
   // Staged ahead of the AAN dispatch hooks; current CHI flow instantiates it
   // without consulting it until later AAN protocol wiring uses the table.

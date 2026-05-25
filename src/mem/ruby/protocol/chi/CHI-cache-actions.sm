@@ -163,6 +163,7 @@ action(AllocateTBE_SeqRequest, desc="") {
         }
       } else if (in_msg.Type == RubyRequestType:ATOMIC_RETURN) {
         out_msg.type := CHIRequestType:AtomicLoad;
+        amoStats.incCoreAtomicLoad();
       } else if (in_msg.Type == RubyRequestType:ATOMIC_NO_RETURN){
         out_msg.type := CHIRequestType:AtomicStore;
       } else {
@@ -1254,6 +1255,7 @@ action(Initiate_WriteUnique_Forward, desc="") {
 action(Initiate_AtomicReturn_LocalWrite, desc="") {
   // Delegato PredictorTable: record AMO at HN-F (PoC path)
   bool delegato_handled := false;
+  amoStats.incHnfAtomicReturn();
   if (hnf_policy_type == 1) {
     // Compute directory state category for predictor lookup
     int dir_case := 3; // DIR_I
@@ -1279,6 +1281,7 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
               tbe.dir_owner);
       tbe.actions.push(Event:SendSnpAMO);
       tbe.dataToBeInvalid := true;
+      amoStats.incDelegate();
       delegato_handled := true;
     } else if (delegato_action == 1) {
       // PT predicted Delegate but owner==requestor or sharers>1; fall through
@@ -1320,11 +1323,15 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
         tbe.actions.pushNB(Event:SendCompData);
       }
       tbe.actions.pushNB(Event:TagArrayWrite);
+      amoStats.incMigrate();
       delegato_handled := true;
     }
   }
 
   if (delegato_handled == false) {
+    if (hnf_policy_type == 1) {
+      amoStats.incCentralize();
+    }
     if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
       tbe.actions.push(Event:SendSnpUnique);
     } else if (tbe.dir_sharers.count() > 0){
@@ -1342,6 +1349,7 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
 
 action(Initiate_AtomicReturn_WriteBack, desc="") {
   bool delegato_handled := false;
+  amoStats.incHnfAtomicReturn();
   if (hnf_policy_type == 1) {
     int dir_case := 3;
     if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
@@ -1362,6 +1370,7 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
               tbe.dir_owner);
       tbe.actions.push(Event:SendSnpAMO);
       tbe.dataToBeInvalid := true;
+      amoStats.incDelegate();
       delegato_handled := true;
     } else if (delegato_action == 1) {
       error("Delegate precondition violated: owner must be exclusive, single sharer, not requestor");
@@ -1401,11 +1410,15 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
         tbe.actions.pushNB(Event:SendCompData);
       }
       tbe.actions.pushNB(Event:TagArrayWrite);
+      amoStats.incMigrate();
       delegato_handled := true;
     }
   }
 
   if (delegato_handled == false) {
+    if (hnf_policy_type == 1) {
+      amoStats.incCentralize();
+    }
     if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
       tbe.actions.push(Event:SendSnpUnique);
     } else if (tbe.dir_sharers.count() > 0){
@@ -1546,6 +1559,7 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       // trips, the topology/controller config violates AAN-lite's assumptions.
       assert(tbe.dir_sharers.isEmpty());
       aanBAT.incLocalHit();
+      amoStats.incAANHit();
       tbe.oldDataBlk := tbe.dataBlk;
       tbe.is_aan_hit := true;
       tbe.doCacheFill := true;
@@ -1561,6 +1575,8 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       // AAN Miss + BAT Admits: fetch ownership via ReadUnique, then execute locally
       DPRINTF(RubySlicc, "AAN Fill: BAT admitted addr=%#x\n", tbe.addr);
       aanBAT.incFill();
+      amoStats.incAANMiss();
+      amoStats.incAANFill();
       tbe.is_aan_hit := true;
       tbe.aan_fill_read_unique := true;
       tbe.doCacheFill := true;
@@ -1577,6 +1593,8 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       // AAN Miss + BAT Rejects: bypass — forward to HNF
       DPRINTF(RubySlicc, "AAN Bypass: BAT rejected addr=%#x\n", tbe.addr);
       aanBAT.incBypass();
+      amoStats.incAANMiss();
+      amoStats.incAANBypass();
       tbe.actions.push(Event:SendAtomicReturn_AANTransparentBypass);
     }
   } else {
@@ -1588,6 +1606,7 @@ action(Initiate_AtomicReturn_Forward, desc="") {
     if (tbe.dataValid && tbe.dataUnique && !tbe.dataMaybeDirtyUpstream &&
         tbe.dir_sharers.isEmpty()) {
       // UD/UC with no upstream holders: execute locally
+      amoStats.incNearL2AMO();
       tbe.actions.push(Event:DataArrayRead);
       tbe.actions.push(Event:SendDBIDResp_AR);
       tbe.actions.push(Event:PrepareAtomicReturnLocal);
@@ -1603,6 +1622,7 @@ action(Initiate_AtomicReturn_Forward, desc="") {
                !tbe.dir_sharers.isEmpty()) {
       // UC_RSC / UD_RSC / UD_RSD: L2 has Unique data, upstream has SC/SD.
       // Invalidate upstream, then execute locally.
+      amoStats.incNearL2AMO();
       tbe.actions.push(Event:SendSnpUnique);
       tbe.actions.push(Event:DataArrayRead);
       tbe.actions.push(Event:SendDBIDResp_AR);
@@ -1619,6 +1639,7 @@ action(Initiate_AtomicReturn_Forward, desc="") {
                tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
       // UC_RU / UD_RU / RU: data at upstream L1D with exclusive ownership.
       // Snoop L1D to get data back, then execute locally.
+      amoStats.incNearL2AMO();
       tbe.actions.push(Event:SendSnpUniqueRetToSrc);
       tbe.actions.push(Event:SendDBIDResp_AR);
       tbe.actions.push(Event:PrepareAtomicReturnLocal);
@@ -1686,6 +1707,7 @@ action(Initiate_AtomicNoReturn_Forward, desc="") {
 
 action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
   bool delegato_migrate := false;
+  amoStats.incHnfAtomicReturn();
   if (hnf_policy_type == 1) {
     int dir_case := 3; // DIR_I
     int delegato_action := delegatoPT.decideAction(tbe.addr,
@@ -1709,10 +1731,14 @@ action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
       }
       tbe.actions.push(Event:WaitCompAck);
       tbe.actions.pushNB(Event:TagArrayWrite);
+      amoStats.incMigrate();
       delegato_migrate := true;
     }
   }
   if (delegato_migrate == false) {
+    if (hnf_policy_type == 1) {
+      amoStats.incCentralize();
+    }
     tbe.actions.push(Event:SendReadNoSnp);
     tbe.actions.pushNB(Event:WriteFEPipe);
     tbe.actions.push(Event:SendDBIDResp_AR);
@@ -1726,6 +1752,7 @@ action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
 
 action(Initiate_AtomicReturn_Miss, desc="") {
   bool delegato_migrate := false;
+  amoStats.incHnfAtomicReturn();
   if (hnf_policy_type == 1) {
     int dir_case := 3; // DIR_I
     int delegato_action := delegatoPT.decideAction(tbe.addr,
@@ -1740,10 +1767,14 @@ action(Initiate_AtomicReturn_Miss, desc="") {
       tbe.actions.push(Event:WaitCompAck);
       tbe.actions.pushNB(Event:SendCompData);
       tbe.actions.pushNB(Event:TagArrayWrite);
+      amoStats.incMigrate();
       delegato_migrate := true;
     }
   }
   if (delegato_migrate == false) {
+    if (hnf_policy_type == 1) {
+      amoStats.incCentralize();
+    }
     tbe.actions.push(Event:SendReadNoSnp);
     tbe.actions.pushNB(Event:WriteFEPipe);
     tbe.actions.push(Event:SendDBIDResp_AR);
@@ -3122,6 +3153,7 @@ action(UpdateDataState_FromADataResp, desc="") {
     DPRINTF(RubySlicc, "Atomic before %s\n", tbe.dataBlk);
     if (is_AAN && tbe.is_aan_hit) {
       aanBAT.incAMOExec();
+      amoStats.incAANAMO();
     }
 
     tbe.oldDataBlk := tbe.dataBlk;
@@ -4345,6 +4377,9 @@ action(Callback_AtomicHit, desc="") {
   sequencer.atomicCallback(tbe.addr, oldDataBlk, false);
   DPRINTF(RubySlicc, "Atomic after %s\n", tbe.dataBlk);
   tbe.dataDirty := true;
+  if (tbe.reqType == CHIRequestType:AtomicLoad) {
+    amoStats.incNearL1AMO();
+  }
   // DynAMO training: atomic hit on UC/UD counts as reuse
   if (policy_type == 3) {
     dynamo.notifyHit(tbe.addr);
