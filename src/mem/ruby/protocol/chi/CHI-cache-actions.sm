@@ -2720,7 +2720,8 @@ action(Receive_ReqDataResp, desc="") {
       // data is dirty
       if ((in_msg.type == CHIDataType:NCBWrData) &&
            ((tbe.reqType == CHIRequestType:AtomicReturn) ||
-            (tbe.reqType == CHIRequestType:AtomicNoReturn))){
+            (tbe.reqType == CHIRequestType:AtomicNoReturn) ||
+            tbe.is_snp_amo)){
         // DO NOTHING
       } else if ((in_msg.type == CHIDataType:CompData_I) &&
                  ((tbe.reqType == CHIRequestType:AtomicReturn) ||
