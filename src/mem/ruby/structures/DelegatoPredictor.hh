@@ -36,7 +36,8 @@
  * Memory Operations on Chiplets" (MICRO '25):
  *
  * 1. DelegatoReuseTable — instantiated in every cache controller.
- *    Training: at L1D (policy_type==4) via Callback_AtomicHit, and at L2
+ *    Training: at L1D when dynamic Delegato RT is enabled via
+ *    Callback_AtomicHit, and at L2
  *    via eviction spill (Profile_Eviction) when amoReuseCount >= 2.
  *    Query: at the owner L2 on SnpAMO arrival — queryAndResetReuse()
  *    returns the eviction-spill signal; upstream_unique is now always
@@ -67,7 +68,7 @@ namespace ruby
 /**
  * Reuse Table: instantiated in every CHI cache controller (same SLICC
  * template).  Training occurs at:
- *   - L1D (policy_type==4): Callback_AtomicHit on local-Unique AMO.
+ *   - L1D with dynamic Delegato RT enabled: Callback_AtomicHit on local-Unique AMO.
  *   - L2 eviction: Profile_Eviction spills amoReuseCount >= 2 to RT.
  * The owner L2 queries its RT on SnpAMO arrival; the RT signal serves as
  * the "eviction spill" component of the three-signal reuse_bit formula:
@@ -185,6 +186,15 @@ class DelegatoPredictorTable
      * @return Action to take (Centralize/Delegate/Migrate)
      */
     int decideAction(Addr addr, NodeID req_id, int dir_case,
+                     NodeID owner_id);
+
+    /**
+     * Stateless policy lookup for fixed CA/PC/PO HN-F policies.
+     *
+     * Unlike decideAction(), this method does not allocate, update LRU,
+     * remember the last requester, or transition policy state.
+     */
+    int staticAction(int policy_state, NodeID req_id, int dir_case,
                      NodeID owner_id);
 
     /**

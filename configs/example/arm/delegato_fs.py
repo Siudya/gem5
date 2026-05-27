@@ -69,6 +69,7 @@ from common.cores.arm import (
     O3_ARM_v7a,
 )
 from ruby import Ruby
+from amo_policy import add_amo_policy_args, resolve_amo_policy
 
 
 # ─── O3 CPU tuned to Delegato paper Table 3 ─────────────────────────────
@@ -451,34 +452,22 @@ def create(args, restore_metadata=None):
     if (1 << block_size_bits) != args.cacheline_size:
         m5.fatal("--cacheline_size must be a power of 2")
 
-    # AMO placement policy
-    # Policy map:  l1d_policy_type  hnf_policy_type
-    #   all-near        0                0           All-near (always at L1 DCache)
-    #   unique-near     1                0           Unique-near baseline
-    #   dynamo          3                0           DynAMO Reuse-PN (AMT in L1D)
-    #   delegato        4                1           Delegato (C/D/M + RT + PT)
-    #   all-far         5                0           All-far (always to HN-F)
-    #   aan             6                0           AAN remote AtomicReturn dispatch
-    #   aan-nofilter    7                0           AAN dispatch without BAT filtering
-    policy_map = {
-        "all-near":     (0, 0),
-        "unique-near":  (1, 0),
-        "dynamo":       (3, 0),
-        "delegato":     (4, 1),
-        "all-far":      (5, 0),
-        "aan":          (6, 0),
-        "aan-nofilter": (7, 0),
-    }
-    l1d_policy, hnf_policy = policy_map[args.amo_policy]
-    print("AMO policy: %s  (L1D policy_type=%d, HN-F hnf_policy_type=%d)"
-          % (args.amo_policy, l1d_policy, hnf_policy))
+    policy = resolve_amo_policy(
+        args.amo_policy,
+        args.l1d_amo_policy,
+        args.aan_amo_policy,
+        args.hnf_amo_policy,
+    )
+    print("AMO policy: %s  (L1D=%s, AAN=%s, HN-F=%s)"
+          % (policy.top_policy, policy.l1d_policy,
+             policy.aan_policy, policy.hnf_policy))
 
     aan_controllers = [
         cntrl
         for aan in getattr(system.ruby, "aan", [])
         for cntrl in aan.getAllControllers()
     ]
-    aan_enabled = l1d_policy in (6, 7)
+    aan_enabled = policy.aan_enabled
     aan_base_cache_id = (
         min(int(cntrl.version) for cntrl in aan_controllers)
         if aan_controllers else 0
@@ -496,7 +485,10 @@ def create(args, restore_metadata=None):
     hnfs_per_row = max(1, hnfs_per_chiplet // aan_rows)
 
     for cpu_idx, cpu in enumerate(cpus):
-        cpu.l1d.policy_type = l1d_policy
+        cpu.l1d.l1d_amo_policy = policy.l1d_policy_code
+        cpu.l1d.aan_amo_policy = policy.aan_policy_code
+        cpu.l1d.hnf_amo_policy = policy.hnf_policy_code
+        cpu.l1d.delegato_rt_enabled = policy.delegato_rt_enabled
         cpu.l1d.cache_block_size_bits = block_size_bits
         cpu.l1d.delegato_rt_entries = 128
         cpu.l1d.delegato_rt_assoc = 2
@@ -514,23 +506,24 @@ def create(args, restore_metadata=None):
     hnf_idx = 0
     for hnf in system.ruby.hnf:
         for cntrl in hnf.getAllControllers():
-            cntrl.hnf_policy_type = hnf_policy
+            cntrl.hnf_amo_policy = policy.hnf_policy_code
             cntrl.delegato_pt_entries = 128
             cntrl.delegato_pt_assoc = 2
             cntrl.cache_block_size_bits = block_size_bits
             cntrl.cores_per_chiplet = cores_per_chiplet
-            cntrl.hnf_chiplet_id = 0 if hnf_idx < cores_per_chiplet else 1
+            cntrl.hnf_chiplet_id = 0 if single_die or hnf_idx < hnfs_per_chiplet else 1
             hnf_idx += 1
 
-    aan_nofilter = args.amo_policy == "aan-nofilter"
     for aan in getattr(system.ruby, "aan", []):
         for cntrl in aan.getAllControllers():
+            cntrl.aan_amo_policy = policy.aan_policy_code
+            cntrl.hnf_amo_policy = policy.hnf_policy_code
             cntrl.cache_block_size_bits = block_size_bits
             cntrl.aan_bat_entries = 128
             cntrl.aan_bat_assoc = 2
             for attr in ("aan_nofilter", "aan_bat_nofilter", "aan_disable_filter"):
                 if attr in cntrl.__class__._params:
-                    setattr(cntrl, attr, aan_nofilter)
+                    setattr(cntrl, attr, policy.aan_nofilter)
 
     system.ruby.clk_domain = SrcClockDomain(
         clock=args.ruby_clock, voltage_domain=system.voltage_domain
@@ -709,12 +702,7 @@ def main():
     Ruby.define_options(parser)
 
     # AMO policy
-    parser.add_argument("--amo-policy", type=str, default="delegato",
-                        choices=["all-near", "unique-near", "dynamo", "delegato",
-                                 "all-far", "aan", "aan-nofilter"],
-                        help="AMO placement policy: delegato (default), "
-                             "all-near (L1 DCache), unique-near (baseline), "
-                             "dynamo, all-far, aan, aan-nofilter")
+    add_amo_policy_args(parser)
 
     args = parser.parse_args()
     args.restore = _resolve_restore_dir(args.restore)
@@ -784,11 +772,16 @@ def main():
         parser.error("--num-cpus only supports 4, 16, or 32")
     if args.heartbeat_insts < 0:
         parser.error("--heartbeat-insts must be a non-negative integer")
-    if args.amo_policy in ("aan", "aan-nofilter") and args.num_cpus not in (16, 32):
+    policy = resolve_amo_policy(
+        args.amo_policy,
+        args.l1d_amo_policy,
+        args.aan_amo_policy,
+        args.hnf_amo_policy,
+    )
+    if policy.aan_enabled and args.num_cpus not in (16, 32):
         parser.error(
-            "--amo-policy aan/aan-nofilter requires --num-cpus 16 or 32 "
-            "because AAN nodes are only defined in delegato_4x8.py "
-            "and delegato_4x12.py"
+            "AAN policies require --num-cpus 16 or 32 because AAN nodes are "
+            "only defined in delegato_4x8.py and delegato_4x12.py"
         )
 
     if args.num_cpus == 4:

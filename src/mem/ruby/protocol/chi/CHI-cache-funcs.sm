@@ -108,6 +108,39 @@ MachineID mapAddressToAANMachine(Addr addr) {
                          intToID(aan_base_cache_id + aan_index));
 }
 
+int computeHnfAMODirCase(TBE tbe) {
+  if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
+    return 2; // DIR_RU
+  } else if (tbe.dir_ownerExists || (tbe.dir_sharers.count() > 0)) {
+    return 1; // DIR_RSC_RSD
+  } else if (tbe.dataValid) {
+    return 0; // DIR_UC_UD
+  }
+  return 3; // DIR_I
+}
+
+int decideHnfAMOAction(Addr addr, TBE tbe, int dir_case) {
+  NodeID requestor_id := machineIDToNodeID(tbe.requestor);
+  NodeID owner_id := machineIDToNodeID(tbe.dir_owner);
+
+  if (hnf_amo_policy == 0) {
+    return 0; // central
+  } else if (hnf_amo_policy == 1) {
+    return 2; // migrate
+  } else if (hnf_amo_policy == 2) {
+    return delegatoPT.staticAction(1, requestor_id, dir_case, owner_id); // pc
+  } else if (hnf_amo_policy == 3) {
+    return delegatoPT.staticAction(2, requestor_id, dir_case, owner_id); // po
+  } else if (hnf_amo_policy == 4) {
+    return delegatoPT.staticAction(0, requestor_id, dir_case, owner_id); // ca
+  } else if (hnf_amo_policy == 5) {
+    return delegatoPT.decideAction(addr, requestor_id, dir_case, owner_id);
+  }
+
+  error("Invalid HN-F AMO policy");
+  return 0;
+}
+
 
 ////////////////////////////////////////////////////////////////////////////
 // Interface functions required by SLICC

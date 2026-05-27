@@ -324,6 +324,15 @@ DelegatoPredictorTable::decideAction(
                              req_local, owner_local);
 }
 
+int
+DelegatoPredictorTable::staticAction(
+    int policy_state, NodeID req_id, int dir_case, NodeID owner_id)
+{
+    bool req_local = isLocal(req_id);
+    bool owner_local = isLocal(owner_id);
+    return mapPolicyToAction(policy_state, dir_case, req_local, owner_local);
+}
+
 void
 DelegatoPredictorTable::updateReuseFeedback(Addr addr, bool reuse_bit)
 {

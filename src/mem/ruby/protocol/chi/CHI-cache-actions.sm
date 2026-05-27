@@ -851,58 +851,31 @@ action(Initiate_StoreMiss, desc="") {
 }
 
 action(Initiate_Atomic_UC, desc="") {
-  if ((policy_type == 0) || // ALL NEAR
-      (policy_type == 1) || // UNIQUE NEAR
-      (policy_type == 2) || // PRESENT NEAR
-      (policy_type == 3) || // DYNAMO REUSE-PN (UC always near)
-      (policy_type == 4) || // DELEGATO (UC always near)
-      (policy_type == 6) || // AAN (UC always near)
-      (policy_type == 7)    // AAN no-filter (UC always near)
-      ){
-    tbe.actions.push(Event:DataArrayRead);
-    tbe.actions.push(Event:DelayAtomic);
-    tbe.actions.push(Event:AtomicHit);
-    tbe.actions.pushNB(Event:DataArrayWrite);
-    tbe.actions.pushNB(Event:TagArrayWrite);
-  } else {
-    error("Invalid policy type");
-  }
+  tbe.actions.push(Event:DataArrayRead);
+  tbe.actions.push(Event:DelayAtomic);
+  tbe.actions.push(Event:AtomicHit);
+  tbe.actions.pushNB(Event:DataArrayWrite);
+  tbe.actions.pushNB(Event:TagArrayWrite);
 }
 
 action(Initiate_Atomic_UD, desc="") {
-  if ((policy_type == 0) || // ALL NEAR
-      (policy_type == 1) || // UNIQUE NEAR
-      (policy_type == 2) || // PRESENT NEAR
-      (policy_type == 3) || // DYNAMO REUSE-PN (UD always near)
-      (policy_type == 4) || // DELEGATO (UD always near)
-      (policy_type == 6) || // AAN (UD always near)
-      (policy_type == 7)    // AAN no-filter (UD always near)
-      ){
-    tbe.actions.push(Event:DataArrayRead);
-    tbe.actions.push(Event:DelayAtomic);
-    tbe.actions.push(Event:AtomicHit);
-    tbe.actions.pushNB(Event:DataArrayWrite);
-    tbe.actions.pushNB(Event:TagArrayWrite);
-  } else {
-    error("Invalid policy type");
-  }
+  tbe.actions.push(Event:DataArrayRead);
+  tbe.actions.push(Event:DelayAtomic);
+  tbe.actions.push(Event:AtomicHit);
+  tbe.actions.pushNB(Event:DataArrayWrite);
+  tbe.actions.pushNB(Event:TagArrayWrite);
 }
 
 action(Initiate_AtomicReturn_I, desc="") {
-  if (policy_type == 0){ // ALL NEAR
+  if (l1d_amo_policy == 0) {
     tbe.actions.push(Event:SendReadUnique);
     tbe.actions.push(Event:WriteFEPipe);
     tbe.actions.push(Event:CheckCacheFill);
     tbe.actions.push(Event:WriteBEPipe);
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
-  } else if ((policy_type == 1) || // UNIQUE NEAR
-              (policy_type == 2) || // PRESENT NEAR
-              (policy_type == 4) || // DELEGATO (I state → far)
-              (policy_type == 6) || // AAN (remote I state → AAN)
-              (policy_type == 7)) { // AAN no-filter (remote I state → AAN)
-    if (((policy_type == 6) || (policy_type == 7)) &&
-        shouldSendAtomicReturnToAAN(tbe.addr)) {
+  } else if (l1d_amo_policy == 1) {
+    if ((aan_amo_policy != 0) && shouldSendAtomicReturnToAAN(tbe.addr)) {
       tbe.actions.push(Event:SendAtomicReturn_AAN);
     } else {
       tbe.actions.push(Event:SendAtomicReturn);
@@ -911,7 +884,7 @@ action(Initiate_AtomicReturn_I, desc="") {
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
     tbe.atomic_to_be_done := false;
-  } else if (policy_type == 3) { // DYNAMO REUSE-PN
+  } else if (l1d_amo_policy == 2) { // DYNAMO REUSE-PN
     if (dynamo.predictNear(tbe.addr, 0)) {
       // Near: fetch line and execute locally
       tbe.actions.push(Event:SendReadUnique);
@@ -921,37 +894,37 @@ action(Initiate_AtomicReturn_I, desc="") {
       tbe.actions.push(Event:TagArrayWrite);
       tbe.atomic_to_be_done := true;
     } else {
-      // Far: send to HN
-      tbe.actions.push(Event:SendAtomicReturn);
+      // Far: send to HN or AAN, depending on the orthogonal AAN policy.
+      if ((aan_amo_policy != 0) && shouldSendAtomicReturnToAAN(tbe.addr)) {
+        tbe.actions.push(Event:SendAtomicReturn_AAN);
+      } else {
+        tbe.actions.push(Event:SendAtomicReturn);
+      }
       tbe.actions.push(Event:SendARData);
       tbe.dataToBeInvalid := true;
       tbe.doCacheFill := false;
       tbe.atomic_to_be_done := false;
     }
   } else {
-    error("Invalid policy type");
+    error("Invalid L1D AMO policy");
   }
 }
 
 action(Initiate_AtomicNoReturn_I, desc="") {
-  if (policy_type == 0){ // ALL NEAR
+  if (l1d_amo_policy == 0) {
     tbe.actions.push(Event:SendReadUnique);
     tbe.actions.push(Event:WriteFEPipe);
     tbe.actions.push(Event:CheckCacheFill);
     tbe.actions.push(Event:WriteBEPipe);
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
-  } else if ((policy_type == 1) || // UNIQUE NEAR
-              (policy_type == 2) || // PRESENT NEAR
-              (policy_type == 4) || // DELEGATO (I state → far)
-              (policy_type == 6) || // AAN (ANR stays on HNF far path)
-              (policy_type == 7)) { // AAN no-filter (ANR stays on HNF far path)
+  } else if (l1d_amo_policy == 1) {
     tbe.actions.push(Event:SendAtomicNoReturn);
     tbe.actions.push(Event:SendANRData);
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
     tbe.atomic_to_be_done := false;
-  } else if (policy_type == 3) { // DYNAMO REUSE-PN
+  } else if (l1d_amo_policy == 2) { // DYNAMO REUSE-PN
     if (dynamo.predictNear(tbe.addr, 0)) {
       // Near: fetch line and execute locally
       tbe.actions.push(Event:SendReadUnique);
@@ -969,25 +942,20 @@ action(Initiate_AtomicNoReturn_I, desc="") {
       tbe.atomic_to_be_done := false;
     }
   } else {
-    error("Invalid policy type");
+    error("Invalid L1D AMO policy");
   }
 }
 
 action(Initiate_AtomicReturn_SD, desc="") {
-  if ((policy_type == 0) || // ALL NEAR
-      (policy_type == 2)) { // PRESENT NEAR
+  if (l1d_amo_policy == 0) {
     tbe.actions.push(Event:SendReadUnique);
     tbe.actions.push(Event:WriteFEPipe);
     tbe.actions.push(Event:CheckCacheFill);
     tbe.actions.push(Event:WriteBEPipe);
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
-  } else if ((policy_type == 1) || // UNIQUE NEAR
-             (policy_type == 4) || // DELEGATO (SD → far)
-             (policy_type == 6) || // AAN (remote SD → AAN)
-             (policy_type == 7)) { // AAN no-filter (remote SD → AAN)
-    if (((policy_type == 6) || (policy_type == 7)) &&
-        shouldSendAtomicReturnToAAN(tbe.addr)) {
+  } else if (l1d_amo_policy == 1) {
+    if ((aan_amo_policy != 0) && shouldSendAtomicReturnToAAN(tbe.addr)) {
       tbe.actions.push(Event:SendAtomicReturn_AAN);
     } else {
       tbe.actions.push(Event:SendAtomicReturn);
@@ -996,7 +964,7 @@ action(Initiate_AtomicReturn_SD, desc="") {
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
     tbe.atomic_to_be_done := false;
-  } else if (policy_type == 3) { // DYNAMO REUSE-PN
+  } else if (l1d_amo_policy == 2) { // DYNAMO REUSE-PN
     if (dynamo.predictNear(tbe.addr, 2)) {
       // Near: upgrade to unique and execute locally
       tbe.actions.push(Event:SendReadUnique);
@@ -1006,37 +974,37 @@ action(Initiate_AtomicReturn_SD, desc="") {
       tbe.actions.push(Event:TagArrayWrite);
       tbe.atomic_to_be_done := true;
     } else {
-      // Far: send to HN
-      tbe.actions.push(Event:SendAtomicReturn);
+      // Far: send to HN or AAN, depending on the orthogonal AAN policy.
+      if ((aan_amo_policy != 0) && shouldSendAtomicReturnToAAN(tbe.addr)) {
+        tbe.actions.push(Event:SendAtomicReturn_AAN);
+      } else {
+        tbe.actions.push(Event:SendAtomicReturn);
+      }
       tbe.actions.push(Event:SendARData);
       tbe.dataToBeInvalid := true;
       tbe.doCacheFill := false;
       tbe.atomic_to_be_done := false;
     }
   } else {
-    error("Invalid policy type");
+    error("Invalid L1D AMO policy");
   }
 }
 
 action(Initiate_AtomicNoReturn_SD, desc="") {
-  if ((policy_type == 0) || // ALL NEAR
-      (policy_type == 2)) { // PRESENT NEAR
+  if (l1d_amo_policy == 0) {
     tbe.actions.push(Event:SendReadUnique);
     tbe.actions.push(Event:WriteFEPipe);
     tbe.actions.push(Event:CheckCacheFill);
     tbe.actions.push(Event:WriteBEPipe);
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
-  } else if ((policy_type == 1) || // UNIQUE NEAR
-             (policy_type == 4) || // DELEGATO (SD → far)
-             (policy_type == 6) || // AAN (ANR stays on HNF far path)
-             (policy_type == 7)) { // AAN no-filter (ANR stays on HNF far path)
+  } else if (l1d_amo_policy == 1) {
     tbe.actions.push(Event:SendAtomicNoReturn);
     tbe.actions.push(Event:SendANRData);
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
     tbe.atomic_to_be_done := false;
-  } else if (policy_type == 3) { // DYNAMO REUSE-PN
+  } else if (l1d_amo_policy == 2) { // DYNAMO REUSE-PN
     if (dynamo.predictNear(tbe.addr, 2)) {
       tbe.actions.push(Event:SendReadUnique);
       tbe.actions.push(Event:WriteFEPipe);
@@ -1052,25 +1020,20 @@ action(Initiate_AtomicNoReturn_SD, desc="") {
       tbe.atomic_to_be_done := false;
     }
   } else {
-    error("Invalid policy type");
+    error("Invalid L1D AMO policy");
   }
 }
 
 action(Initiate_AtomicReturn_SC, desc="") {
-  if ((policy_type == 0) || // ALL NEAR
-      (policy_type == 2)) { // PRESENT NEAR
+  if (l1d_amo_policy == 0) {
     tbe.actions.push(Event:SendReadUnique);
     tbe.actions.push(Event:WriteFEPipe);
     tbe.actions.push(Event:CheckCacheFill);
     tbe.actions.push(Event:WriteBEPipe);
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
-  } else if ((policy_type == 1) || // UNIQUE NEAR
-             (policy_type == 4) || // DELEGATO (SC → far)
-             (policy_type == 6) || // AAN (remote SC → AAN)
-             (policy_type == 7)) { // AAN no-filter (remote SC → AAN)
-    if (((policy_type == 6) || (policy_type == 7)) &&
-        shouldSendAtomicReturnToAAN(tbe.addr)) {
+  } else if (l1d_amo_policy == 1) {
+    if ((aan_amo_policy != 0) && shouldSendAtomicReturnToAAN(tbe.addr)) {
       tbe.actions.push(Event:SendAtomicReturn_AAN);
     } else {
       tbe.actions.push(Event:SendAtomicReturn);
@@ -1079,7 +1042,7 @@ action(Initiate_AtomicReturn_SC, desc="") {
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
     tbe.atomic_to_be_done := false;
-  } else if (policy_type == 3) { // DYNAMO REUSE-PN
+  } else if (l1d_amo_policy == 2) { // DYNAMO REUSE-PN
     if (dynamo.predictNear(tbe.addr, 1)) {
       tbe.actions.push(Event:SendReadUnique);
       tbe.actions.push(Event:WriteFEPipe);
@@ -1088,36 +1051,36 @@ action(Initiate_AtomicReturn_SC, desc="") {
       tbe.actions.push(Event:TagArrayWrite);
       tbe.atomic_to_be_done := true;
     } else {
-      tbe.actions.push(Event:SendAtomicReturn);
+      if ((aan_amo_policy != 0) && shouldSendAtomicReturnToAAN(tbe.addr)) {
+        tbe.actions.push(Event:SendAtomicReturn_AAN);
+      } else {
+        tbe.actions.push(Event:SendAtomicReturn);
+      }
       tbe.actions.push(Event:SendARData);
       tbe.dataToBeInvalid := true;
       tbe.doCacheFill := false;
       tbe.atomic_to_be_done := false;
     }
   } else {
-    error("Invalid policy type");
+    error("Invalid L1D AMO policy");
   }
 }
 
 action(Initiate_AtomicNoReturn_SC, desc="") {
-  if ((policy_type == 0) || // ALL NEAR
-      (policy_type == 2)) { // PRESENT NEAR
+  if (l1d_amo_policy == 0) {
     tbe.actions.push(Event:SendReadUnique);
     tbe.actions.push(Event:WriteFEPipe);
     tbe.actions.push(Event:CheckCacheFill);
     tbe.actions.push(Event:WriteBEPipe);
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
-  } else if ((policy_type == 1) || // UNIQUE NEAR
-             (policy_type == 4) || // DELEGATO (SC → far)
-             (policy_type == 6) || // AAN (ANR stays on HNF far path)
-             (policy_type == 7)) { // AAN no-filter (ANR stays on HNF far path)
+  } else if (l1d_amo_policy == 1) {
     tbe.actions.push(Event:SendAtomicNoReturn);
     tbe.actions.push(Event:SendANRData);
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
     tbe.atomic_to_be_done := false;
-  } else if (policy_type == 3) { // DYNAMO REUSE-PN
+  } else if (l1d_amo_policy == 2) { // DYNAMO REUSE-PN
     if (dynamo.predictNear(tbe.addr, 1)) {
       tbe.actions.push(Event:SendReadUnique);
       tbe.actions.push(Event:WriteFEPipe);
@@ -1133,7 +1096,7 @@ action(Initiate_AtomicNoReturn_SC, desc="") {
       tbe.atomic_to_be_done := false;
     }
   } else {
-    error("Invalid policy type");
+    error("Invalid L1D AMO policy");
   }
 }
 
@@ -1255,19 +1218,9 @@ action(Initiate_WriteUnique_Forward, desc="") {
 action(Initiate_AtomicReturn_LocalWrite, desc="") {
   // Delegato PredictorTable: record AMO at HN-F (PoC path)
   bool delegato_handled := false;
-  if (hnf_policy_type == 1) {
-    // Compute directory state category for predictor lookup
-    int dir_case := 3; // DIR_I
-    if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
-      dir_case := 2; // DIR_RU
-    } else if (tbe.dir_ownerExists || (tbe.dir_sharers.count() > 0)) {
-      dir_case := 1; // DIR_RSC_RSD
-    } else if (tbe.dataValid) {
-      dir_case := 0; // DIR_UC_UD
-    }
-    int delegato_action := delegatoPT.decideAction(tbe.addr,
-        machineIDToNodeID(tbe.requestor), dir_case,
-        machineIDToNodeID(tbe.dir_owner));
+  if (hnf_amo_policy != 0) {
+    int dir_case := computeHnfAMODirCase(tbe);
+    int delegato_action := decideHnfAMOAction(tbe.addr, tbe, dir_case);
     DPRINTF(RubySlicc, "Delegato PT (PoC): addr=%#x req=%d dir_case=%d action=%d\n",
             tbe.addr, machineIDToNodeID(tbe.requestor), dir_case, delegato_action);
 
@@ -1346,18 +1299,9 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
 
 action(Initiate_AtomicReturn_WriteBack, desc="") {
   bool delegato_handled := false;
-  if (hnf_policy_type == 1) {
-    int dir_case := 3;
-    if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
-      dir_case := 2;
-    } else if (tbe.dir_ownerExists || (tbe.dir_sharers.count() > 0)) {
-      dir_case := 1;
-    } else if (tbe.dataValid) {
-      dir_case := 0;
-    }
-    int delegato_action := delegatoPT.decideAction(tbe.addr,
-        machineIDToNodeID(tbe.requestor), dir_case,
-        machineIDToNodeID(tbe.dir_owner));
+  if (hnf_amo_policy != 0) {
+    int dir_case := computeHnfAMODirCase(tbe);
+    int delegato_action := decideHnfAMOAction(tbe.addr, tbe, dir_case);
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
         tbe.dir_ownerIsExcl &&
         (tbe.dir_owner != tbe.requestor) &&
@@ -1369,7 +1313,9 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
       amoStats.incDelegate();
       delegato_handled := true;
     } else if (delegato_action == 1) {
-      error("Delegate precondition violated: owner must be exclusive, single sharer, not requestor");
+      DPRINTF(RubySlicc, "WARNING: Delegate fallback to Centralize addr=%#x req=%d owner=%d sharers=%d\n",
+              tbe.addr, machineIDToNodeID(tbe.requestor),
+              machineIDToNodeID(tbe.dir_owner), tbe.dir_sharers.count());
     }
 
     // Migrate: reuse ReadUnique flow
@@ -1432,18 +1378,9 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
 
 action(Initiate_AtomicNoReturn_LocalWrite, desc="") {
   bool delegato_handled := false;
-  if (hnf_policy_type == 1) {
-    int dir_case := 3;
-    if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
-      dir_case := 2;
-    } else if (tbe.dir_ownerExists || (tbe.dir_sharers.count() > 0)) {
-      dir_case := 1;
-    } else if (tbe.dataValid) {
-      dir_case := 0;
-    }
-    int delegato_action := delegatoPT.decideAction(tbe.addr,
-        machineIDToNodeID(tbe.requestor), dir_case,
-        machineIDToNodeID(tbe.dir_owner));
+  if (hnf_amo_policy != 0) {
+    int dir_case := computeHnfAMODirCase(tbe);
+    int delegato_action := decideHnfAMOAction(tbe.addr, tbe, dir_case);
     DPRINTF(RubySlicc, "Delegato PT (PoC): addr=%#x req=%d dir_case=%d action=%d\n",
             tbe.addr, machineIDToNodeID(tbe.requestor), dir_case, delegato_action);
 
@@ -1456,15 +1393,19 @@ action(Initiate_AtomicNoReturn_LocalWrite, desc="") {
               tbe.dir_owner);
       tbe.actions.push(Event:SendSnpAMO);
       tbe.dataToBeInvalid := true;
+      amoStats.incDelegate();
       delegato_handled := true;
     } else if (delegato_action == 1) {
-      error("Delegate precondition violated: owner must be exclusive, single sharer, not requestor");
+      DPRINTF(RubySlicc, "WARNING: Delegate fallback to Centralize addr=%#x req=%d owner=%d sharers=%d\n",
+              tbe.addr, machineIDToNodeID(tbe.requestor),
+              machineIDToNodeID(tbe.dir_owner), tbe.dir_sharers.count());
     }
     // Migrate not supported for AtomicNoReturn (protocol mismatch).
     // Falls through to Centralize.
   }
 
   if (delegato_handled == false) {
+    amoStats.incCentralize();
     if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
       tbe.actions.push(Event:SendSnpUnique);
     } else if (tbe.dir_sharers.count() > 0){
@@ -1487,18 +1428,9 @@ action(Initiate_AtomicNoReturn_LocalWrite, desc="") {
 
 action(Initiate_AtomicNoReturn_WriteBack, desc="") {
   bool delegato_handled := false;
-  if (hnf_policy_type == 1) {
-    int dir_case := 3;
-    if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
-      dir_case := 2;
-    } else if (tbe.dir_ownerExists || (tbe.dir_sharers.count() > 0)) {
-      dir_case := 1;
-    } else if (tbe.dataValid) {
-      dir_case := 0;
-    }
-    int delegato_action := delegatoPT.decideAction(tbe.addr,
-        machineIDToNodeID(tbe.requestor), dir_case,
-        machineIDToNodeID(tbe.dir_owner));
+  if (hnf_amo_policy != 0) {
+    int dir_case := computeHnfAMODirCase(tbe);
+    int delegato_action := decideHnfAMOAction(tbe.addr, tbe, dir_case);
     if ((delegato_action == 1) && tbe.dir_ownerExists &&
         tbe.dir_ownerIsExcl &&
         (tbe.dir_owner != tbe.requestor) &&
@@ -1507,15 +1439,19 @@ action(Initiate_AtomicNoReturn_WriteBack, desc="") {
               tbe.dir_owner);
       tbe.actions.push(Event:SendSnpAMO);
       tbe.dataToBeInvalid := true;
+      amoStats.incDelegate();
       delegato_handled := true;
     } else if (delegato_action == 1) {
-      error("Delegate precondition violated: owner must be exclusive, single sharer, not requestor");
+      DPRINTF(RubySlicc, "WARNING: Delegate fallback to Centralize addr=%#x req=%d owner=%d sharers=%d\n",
+              tbe.addr, machineIDToNodeID(tbe.requestor),
+              machineIDToNodeID(tbe.dir_owner), tbe.dir_sharers.count());
     }
     // Migrate not supported for AtomicNoReturn (protocol mismatch).
     // Falls through to Centralize.
   }
 
   if (delegato_handled == false) {
+    amoStats.incCentralize();
     if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
       tbe.actions.push(Event:SendSnpUnique);
     } else if (tbe.dir_sharers.count() > 0){
@@ -1701,11 +1637,9 @@ action(Initiate_AtomicNoReturn_Forward, desc="") {
 
 action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
   bool delegato_migrate := false;
-  if (hnf_policy_type == 1) {
+  if (hnf_amo_policy != 0) {
     int dir_case := 3; // DIR_I
-    int delegato_action := delegatoPT.decideAction(tbe.addr,
-        machineIDToNodeID(tbe.requestor), dir_case,
-        machineIDToNodeID(tbe.dir_owner));
+    int delegato_action := decideHnfAMOAction(tbe.addr, tbe, dir_case);
     DPRINTF(RubySlicc, "Delegato PT (Miss_Alloc): addr=%#x req=%d action=%d\n",
             tbe.addr, machineIDToNodeID(tbe.requestor), delegato_action);
     if (delegato_action == 2) {
@@ -1743,11 +1677,9 @@ action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
 
 action(Initiate_AtomicReturn_Miss, desc="") {
   bool delegato_migrate := false;
-  if (hnf_policy_type == 1) {
+  if (hnf_amo_policy != 0) {
     int dir_case := 3; // DIR_I
-    int delegato_action := delegatoPT.decideAction(tbe.addr,
-        machineIDToNodeID(tbe.requestor), dir_case,
-        machineIDToNodeID(tbe.dir_owner));
+    int delegato_action := decideHnfAMOAction(tbe.addr, tbe, dir_case);
     DPRINTF(RubySlicc, "Delegato PT (Miss): addr=%#x req=%d action=%d\n",
             tbe.addr, machineIDToNodeID(tbe.requestor), delegato_action);
     if (delegato_action == 2) {
@@ -1778,6 +1710,7 @@ action(Initiate_AtomicReturn_Miss, desc="") {
 
 action(Initiate_AtomicNoReturn_Miss_Alloc, desc="") {
   assert(is_HN);
+  amoStats.incCentralize();
   tbe.actions.push(Event:SendReadNoSnp);
   if (comp_anr) {
     tbe.actions.push(Event:SendDBIDResp_ANR);
@@ -1796,6 +1729,7 @@ action(Initiate_AtomicNoReturn_Miss_Alloc, desc="") {
 
 action(Initiate_AtomicNoReturn_Miss, desc="") {
   assert(is_HN);
+  amoStats.incCentralize();
   tbe.actions.push(Event:SendReadNoSnp);
   if (comp_anr) {
     tbe.actions.push(Event:SendDBIDResp_ANR);
@@ -4328,7 +4262,7 @@ action(Callback_LoadHit, desc="") {
     sequencer.readCallback(tbe.addr, tbe.dataBlk, false);
   }
   // DynAMO training: L1D hit sets reuse_bit
-  if (policy_type == 3) {
+  if (l1d_amo_policy == 2) {
     dynamo.notifyHit(tbe.addr);
   }
 }
@@ -4345,7 +4279,7 @@ action(Callback_StoreHit, desc="") {
     tbe.dataDirty := true;
   }
   // DynAMO training: L1D hit sets reuse_bit
-  if (policy_type == 3) {
+  if (l1d_amo_policy == 2) {
     dynamo.notifyHit(tbe.addr);
   }
 }
@@ -4369,11 +4303,11 @@ action(Callback_AtomicHit, desc="") {
     amoStats.incNearL1AMO();
   }
   // DynAMO training: atomic hit on UC/UD counts as reuse
-  if (policy_type == 3) {
+  if (l1d_amo_policy == 2) {
     dynamo.notifyHit(tbe.addr);
   }
   // Delegato ReuseTable: local AMO on Unique line → set reuse=1
-  if (policy_type == 4) {
+  if (delegato_rt_enabled) {
     delegatoRT.notifyLocalUniqueAmo(tbe.addr);
     // fix_2: also mark the cache entry for L1D → L2 piggyback
     if (is_valid(cache_entry)) {
@@ -4635,11 +4569,11 @@ action(Profile_Eviction, desc="") {
     pfProxy.notifyPfEvict(address, cache_entry.HWPrefetched, cache_entry.requestor);
   }
   // DynAMO training: update reuse confidence on eviction
-  if (policy_type == 3) {
+  if (l1d_amo_policy == 2) {
     dynamo.notifyEvictOrInval(address);
   }
   // Delegato fix_3: spill amoReuseCount to RT before eviction.
-  // No policy_type gate — L2 (which holds owner data) has policy_type==0
+  // No L1D policy gate: L2 always handles owner-side reuse tracking.
   // but still tracks amoReuseCount via child piggyback / forward / Migrate.
   if (is_valid(cache_entry)) {
     if (cache_entry.amoReuseCount >= 2) {
@@ -5212,7 +5146,7 @@ action(Receive_SnpResp_AMO, desc="Delegato: HN-F processes SnpResp_AMO from owne
     }
 
     // Update PredictorTable with reuse feedback
-    if (is_HN && (hnf_policy_type == 1)) {
+    if (is_HN && (hnf_amo_policy == 5)) {
       delegatoPT.updateReuseFeedback(tbe.addr, in_msg.reuse_bit);
       DPRINTF(RubySlicc, "Delegato: HN-F received SnpResp_AMO reuse_bit=%d for addr=%#x\n",
               in_msg.reuse_bit, tbe.addr);

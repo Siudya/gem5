@@ -131,18 +131,16 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   // possible.
   bool enable_DCT;
 
-  // Atomic Operation Policy
-  // All Near executes all Atomics at L1 (variable set to 0; default)
-  // Unique Near executes Atomics at HNF for states I, SC, SD (set to 1)
-  // Present Near execites all Atomics at L1 except when state is I (set to 2)
-  // DynAMO-Reuse-PN uses per-line reuse prediction (set to 3)
-  // Delegato uses Unique-near-else-far at L1D (set to 4)
-  // All-far executes atomics at HNF (set to 5)
-  // AAN routes remote AtomicReturn far path to AAN (set to 6)
-  // AAN no-filter routes remote AtomicReturn far path to AAN (set to 7)
-  int policy_type := 0;
+  // Orthogonal AMO policies.
+  // L1D: 0=near, 1=unique-near, 2=dynamo.
+  // AAN: 0=bypass, 1=near, 2=filter.
+  // HN-F: 0=central, 1=migrate, 2=pc, 3=po, 4=ca, 5=delegato.
+  int l1d_amo_policy := 0;
+  int aan_amo_policy := 0;
+  int hnf_amo_policy := 0;
+  bool delegato_rt_enabled := "False";
 
-  // DynAMO predictor parameters (only used when policy_type == 3)
+  // DynAMO predictor parameters (only used when l1d_amo_policy == 2)
   int amt_entries := 128;
   int amt_assoc := 4;
   int reuse_counter_bits := 5;
@@ -168,11 +166,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   int aan_hnfs_per_row := 4;
   int aan_hnf_select_bits := 5;
 
-  // HN-F Delegato Predictor Table policy
-  // 0 = no predictor (default); 1 = Delegato predictor enabled
-  int hnf_policy_type := 0;
-
-  // Delegato Predictor Table parameters (used when hnf_policy_type == 1, at HN-F)
+  // Delegato Predictor Table parameters (used when hnf_amo_policy == 5, at HN-F)
   int delegato_pt_entries := 128;
   int delegato_pt_assoc := 2;
 
@@ -915,7 +909,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   // Interface to prefetchers
   RubyPrefetcherProxy pfProxy, constructor="this, m_prefetcher_ptr, m_prefetchQueue_ptr";
 
-  // DynAMO-Reuse-PN predictor (per-core, only active when policy_type == 3)
+  // DynAMO-Reuse-PN predictor (per-core, only active when l1d_amo_policy == 2)
   DynAMOPredictor dynamo, constructor="m_amt_entries, m_amt_assoc, m_reuse_counter_bits, m_cache_block_size_bits";
 
   // Delegato Reuse Table: eviction-spill store for AMO reuse tracking.
@@ -925,7 +919,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   //        are evaluated directly in SLICC).
   DelegatoReuseTable delegatoRT, constructor="m_delegato_rt_entries, m_delegato_rt_assoc, m_cache_block_size_bits";
 
-  // Delegato Predictor Table (per HN-F, only active when hnf_policy_type == 1)
+  // Delegato Predictor Table (per HN-F, dynamic when hnf_amo_policy == 5)
   DelegatoPredictorTable delegatoPT, constructor="m_delegato_pt_entries, m_delegato_pt_assoc, m_cache_block_size_bits, m_cores_per_chiplet, m_hnf_chiplet_id";
 
   // AMO execution/delegation stats. Counts are per controller; nonzero

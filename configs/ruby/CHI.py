@@ -183,11 +183,15 @@ def create_system(
         all_cntrls.extend(hnf.getAllControllers())
         hnf_dests.extend(hnf.getAllControllers())
 
+    aan_policy = getattr(options, "aan_amo_policy", None)
+    if aan_policy is None:
+        aan_policy = {
+            "aan-near": "near",
+            "aan-filter": "filter",
+            "dynaan": "near",
+        }.get(getattr(options, "amo_policy", None), "bypass")
     aan_nodes = []
-    if (
-        getattr(options, "amo_policy", None) in ["aan", "aan-nofilter"]
-        and CHI_AAN is not None
-    ):
+    if aan_policy != "bypass" and CHI_AAN is not None:
         aan_cb = getattr(system, "_aan_gen", CHI_AAN.generate)
         aan_nodes = aan_cb(options, ruby_system, cpus)
         if aan_nodes:
