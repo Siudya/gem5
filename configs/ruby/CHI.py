@@ -186,9 +186,8 @@ def create_system(
     aan_policy = getattr(options, "aan_amo_policy", None)
     if aan_policy is None:
         aan_policy = {
-            "aan-near": "near",
-            "aan-filter": "filter",
             "dynaan": "near",
+            "dynaan-filter": "filter",
         }.get(getattr(options, "amo_policy", None), "bypass")
     aan_nodes = []
     if aan_policy != "bypass" and CHI_AAN is not None:

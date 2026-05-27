@@ -36,9 +36,8 @@ TOP_POLICY_MAP = {
     "po": ("unique-near", "bypass", "po"),
     "ca": ("unique-near", "bypass", "ca"),
     "delegato": ("unique-near", "bypass", "delegato"),
-    "aan-near": ("unique-near", "near", "central"),
-    "aan-filter": ("unique-near", "filter", "central"),
     "dynaan": ("dynamo", "near", "central"),
+    "dynaan-filter": ("dynamo", "filter", "central"),
 }
 
 
