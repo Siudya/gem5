@@ -47,6 +47,7 @@ from slicc.symbols.Var import Var
 
 python_class_map = {
     "int": "Int",
+    "IntVec": "VectorInt",
     "NodeID": "Int",
     "uint32_t": "UInt32",
     "std::string": "String",
@@ -291,9 +292,16 @@ class $py_ident(RubyController):
 
             if param.type_ast.type.c_ident in python_class_map:
                 python_type = python_class_map[param.type_ast.type.c_ident]
-                code(
-                    '${{param.ident}} = Param.${{python_type}}(${dflt_str}"")'
-                )
+                if python_type.startswith("Vector"):
+                    code(
+                        '${{param.ident}} = VectorParam.${{python_type[6:]}}'
+                        '(${dflt_str}"")'
+                    )
+                else:
+                    code(
+                        '${{param.ident}} = Param.${{python_type}}'
+                        '(${dflt_str}"")'
+                    )
 
             else:
                 self.error(

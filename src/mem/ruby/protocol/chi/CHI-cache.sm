@@ -171,9 +171,10 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   int delegato_pt_assoc := 2;
 
   // Delegato chiplet locality parameters (used by Predictor Table)
-  // cores_per_chiplet: number of cores per chiplet (default: 16 for dual-chiplet 32-core)
-  // hnf_chiplet_id: this HN-F's chiplet (0 or 1)
-  int cores_per_chiplet := 16;
+  // node_id_to_chiplet maps controller NodeID/version to chiplet id. Entries
+  // set to -1 are invalid and cause a fatal error if queried.
+  // hnf_chiplet_id is this HN-F's chiplet, set explicitly by the top-level config.
+  IntVec node_id_to_chiplet := "-1";
   int hnf_chiplet_id := 0;
 
 
@@ -920,7 +921,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   DelegatoReuseTable delegatoRT, constructor="m_delegato_rt_entries, m_delegato_rt_assoc, m_cache_block_size_bits";
 
   // Delegato Predictor Table (per HN-F, dynamic when hnf_amo_policy == 5)
-  DelegatoPredictorTable delegatoPT, constructor="m_delegato_pt_entries, m_delegato_pt_assoc, m_cache_block_size_bits, m_cores_per_chiplet, m_hnf_chiplet_id";
+  DelegatoPredictorTable delegatoPT, constructor="m_delegato_pt_entries, m_delegato_pt_assoc, m_cache_block_size_bits, m_node_id_to_chiplet, m_hnf_chiplet_id";
 
   // AMO execution/delegation stats. Counts are per controller; nonzero
   // subsets identify RN-F/L1D, L2/AAN, and HN-F roles.

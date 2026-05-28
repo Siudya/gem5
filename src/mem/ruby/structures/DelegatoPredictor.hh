@@ -169,11 +169,12 @@ class DelegatoPredictorTable
      * @param entries Total number of entries (default: 128)
      * @param assoc   Set associativity (default: 2)
      * @param block_size_bits log2(cache line size in bytes)
-     * @param cores_per_chiplet Number of cores per chiplet (for locality)
+     * @param node_id_to_chiplet Explicit controller NodeID to chiplet map.
      * @param hnf_chiplet_id    This HN-F's chiplet (0 or 1)
      */
     DelegatoPredictorTable(int entries, int assoc, int block_size_bits,
-                           int cores_per_chiplet, int hnf_chiplet_id);
+                           const std::vector<int>& node_id_to_chiplet,
+                           int hnf_chiplet_id);
 
     /**
      * Look up the predictor for a far AMO and decide the action.
@@ -231,7 +232,7 @@ class DelegatoPredictorTable
 
     std::vector<std::vector<PTEntry>> m_table;
 
-    int m_cores_per_chiplet;
+    std::vector<int> m_node_id_to_chiplet;
     int m_hnf_chiplet_id;
 
     int getSet(Addr addr) const;

@@ -150,10 +150,10 @@ DelegatoReuseTable::queryAndResetReuse(Addr addr, bool upstream_unique)
 
 DelegatoPredictorTable::DelegatoPredictorTable(
     int entries, int assoc, int block_size_bits,
-    int cores_per_chiplet, int hnf_chiplet_id)
+    const std::vector<int>& node_id_to_chiplet, int hnf_chiplet_id)
     : m_assoc(assoc),
       m_block_size_bits(block_size_bits),
-      m_cores_per_chiplet(cores_per_chiplet),
+      m_node_id_to_chiplet(node_id_to_chiplet),
       m_hnf_chiplet_id(hnf_chiplet_id)
 {
     assert(entries > 0 && assoc > 0);
@@ -230,10 +230,13 @@ DelegatoPredictorTable::touchLRU(PTEntry& entry)
 int
 DelegatoPredictorTable::getChiplet(NodeID nodeID) const
 {
-    if (m_cores_per_chiplet <= 0)
-        return 0;
-    int num_cpus = 2 * m_cores_per_chiplet;
-    return ((int)(nodeID % num_cpus)) / m_cores_per_chiplet;
+    fatal_if(nodeID >= m_node_id_to_chiplet.size(),
+             "Delegato locality map missing NodeID %u (map size %zu)",
+             nodeID, m_node_id_to_chiplet.size());
+    int chiplet = m_node_id_to_chiplet[nodeID];
+    fatal_if(chiplet < 0,
+             "Delegato locality map has no chiplet for NodeID %u", nodeID);
+    return chiplet;
 }
 
 bool
@@ -293,7 +296,7 @@ DelegatoPredictorTable::decideAction(
     Addr addr, NodeID req_id, int dir_case, NodeID owner_id)
 {
     bool req_local = isLocal(req_id);
-    bool owner_local = isLocal(owner_id); // only meaningful for DIR_RU
+    bool owner_local = (dir_case == DIR_RU) ? isLocal(owner_id) : false;
 
     PTEntry* entry = lookup(addr);
 
@@ -329,7 +332,7 @@ DelegatoPredictorTable::staticAction(
     int policy_state, NodeID req_id, int dir_case, NodeID owner_id)
 {
     bool req_local = isLocal(req_id);
-    bool owner_local = isLocal(owner_id);
+    bool owner_local = (dir_case == DIR_RU) ? isLocal(owner_id) : false;
     return mapPolicyToAction(policy_state, dir_case, req_local, owner_local);
 }
 

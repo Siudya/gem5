@@ -483,8 +483,21 @@ def create(args, restore_metadata=None):
     cores_per_chiplet = args.num_cpus if single_die else max(1, args.num_cpus // 2)
     hnfs_per_chiplet = hnf_count if single_die else max(1, hnf_count // 2)
     hnfs_per_row = max(1, hnfs_per_chiplet // aan_rows)
+    node_id_to_chiplet = []
+
+    def set_node_chiplet(node_id, chiplet_id):
+        node_id = int(node_id)
+        while len(node_id_to_chiplet) <= node_id:
+            node_id_to_chiplet.append(-1)
+        if node_id_to_chiplet[node_id] not in (-1, chiplet_id):
+            m5.fatal(
+                "conflicting Delegato chiplet mapping for NodeID "
+                f"{node_id}: {node_id_to_chiplet[node_id]} vs {chiplet_id}"
+            )
+        node_id_to_chiplet[node_id] = chiplet_id
 
     for cpu_idx, cpu in enumerate(cpus):
+        cpu_chiplet_id = 0 if single_die else min(1, cpu_idx // cores_per_chiplet)
         cpu.l1d.l1d_amo_policy = policy.l1d_policy_code
         cpu.l1d.aan_amo_policy = policy.aan_policy_code
         cpu.l1d.hnf_amo_policy = policy.hnf_policy_code
@@ -496,22 +509,24 @@ def create(args, restore_metadata=None):
         cpu.l1d.aan_base_cache_id = aan_base_cache_id
         cpu.l1d.aan_num_nodes = len(aan_controllers)
         cpu.l1d.aan_rows = aan_rows
-        cpu.l1d.aan_requester_chiplet_id = (
-            0 if single_die else min(1, cpu_idx // cores_per_chiplet)
-        )
+        cpu.l1d.aan_requester_chiplet_id = cpu_chiplet_id
         cpu.l1d.aan_hnfs_per_chiplet = hnfs_per_chiplet
         cpu.l1d.aan_hnfs_per_row = hnfs_per_row
         cpu.l1d.aan_hnf_select_bits = hnf_select_bits
+        set_node_chiplet(cpu.l1d.version, cpu_chiplet_id)
+        if hasattr(cpu, "l2"):
+            set_node_chiplet(cpu.l2.version, cpu_chiplet_id)
 
     hnf_idx = 0
     for hnf in system.ruby.hnf:
         for cntrl in hnf.getAllControllers():
+            hnf_chiplet_id = 0 if single_die or hnf_idx < hnfs_per_chiplet else 1
             cntrl.hnf_amo_policy = policy.hnf_policy_code
             cntrl.delegato_pt_entries = 128
             cntrl.delegato_pt_assoc = 2
             cntrl.cache_block_size_bits = block_size_bits
-            cntrl.cores_per_chiplet = cores_per_chiplet
-            cntrl.hnf_chiplet_id = 0 if single_die or hnf_idx < hnfs_per_chiplet else 1
+            cntrl.hnf_chiplet_id = hnf_chiplet_id
+            set_node_chiplet(cntrl.version, hnf_chiplet_id)
             hnf_idx += 1
 
     for aan in getattr(system.ruby, "aan", []):
@@ -524,6 +539,18 @@ def create(args, restore_metadata=None):
             for attr in ("aan_nofilter", "aan_bat_nofilter", "aan_disable_filter"):
                 if attr in cntrl.__class__._params:
                     setattr(cntrl, attr, policy.aan_nofilter)
+            if len(aan_controllers) > 0:
+                aan_idx = int(cntrl.version) - aan_base_cache_id
+                aan_per_chiplet = (
+                    len(aan_controllers) if single_die
+                    else max(1, len(aan_controllers) // 2)
+                )
+                aan_chiplet_id = 0 if single_die else min(1, aan_idx // aan_per_chiplet)
+                set_node_chiplet(cntrl.version, aan_chiplet_id)
+
+    for hnf in system.ruby.hnf:
+        for cntrl in hnf.getAllControllers():
+            cntrl.node_id_to_chiplet = node_id_to_chiplet
 
     system.ruby.clk_domain = SrcClockDomain(
         clock=args.ruby_clock, voltage_domain=system.voltage_domain
