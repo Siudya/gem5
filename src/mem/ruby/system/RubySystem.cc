@@ -330,7 +330,11 @@ RubySystem::shouldRouteAddressToAAN(
     fatal_if(node_i == routeNodes.end(),
              "Ruby route node id %lld missing for requester %s",
              requester_i->second, MachineIDToString(requester));
-    if (node_i->second.role != "RNF" && node_i->second.role != "L2") {
+    // Only the interconnect-facing RN-F (the L2 in this topology) may route an
+    // atomic to an AAN. Requests issued by an L1 (L1I/L1D) must always be
+    // processed at its private L2/RN-F first; the RN-F then decides whether to
+    // serve locally or forward to the AAN/HNF.
+    if (node_i->second.role != "RNF") {
         return false;
     }
 

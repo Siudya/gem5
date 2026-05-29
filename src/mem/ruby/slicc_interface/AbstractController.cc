@@ -484,26 +484,25 @@ const
         }
 
         if (dst_role == "HNF") {
-            fatal_if(src_role != "RNF" && src_role != "L2" &&
+            fatal_if(src_role != "RNF" &&
                      src_role != "AAN" && src_role != "RNI",
-                     "%s: only RNF/L2/AAN/RNI may route downstream to HNF "
+                     "%s: only RNF/AAN/RNI may route downstream to HNF "
                      "(src=%s addr=%#llx)\n",
                      name(), src_role, addr);
             return m_ruby_system->routeAddressToMachine("HNF", addr);
         }
 
         if (dst_role == "AAN") {
-            fatal_if(src_role != "RNF" && src_role != "L2",
-                     "%s: only RNF/L2 may route downstream to AAN "
+            fatal_if(src_role != "RNF",
+                     "%s: only RNF may route downstream to AAN "
                      "(src=%s addr=%#llx)\n",
                      name(), src_role, addr);
             return m_ruby_system->routeAddressToMachine("AAN", addr);
         }
 
         if (dst_role == "MN") {
-            fatal_if(src_role != "RNF" && src_role != "L2" &&
-                     src_role != "RNI",
-                     "%s: only RNF/L2/RNI may route downstream to MN "
+            fatal_if(src_role != "RNF" && src_role != "RNI",
+                     "%s: only RNF/RNI may route downstream to MN "
                      "(src=%s addr=%#llx)\n",
                      name(), src_role, addr);
             return m_ruby_system->routeAddressToMachine("MN", addr);

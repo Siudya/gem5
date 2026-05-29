@@ -55,8 +55,9 @@ MN_MIN = 0x0
 MN_MAX = 0x400
 
 NODE_ID_BASE = {
-    "RNF": 0,
-    "L2": 8,
+    "L1I": 0,
+    "L1D": 4,
+    "RNF": 8,
     "HNF": 12,
     "AAN": 16,
     "SNF": 20,

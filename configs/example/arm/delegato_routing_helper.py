@@ -156,11 +156,15 @@ def configure_custom_route_table(
         for rnf in getattr(ruby_system, "rnf", [])
         for cpu in getattr(rnf, "_cpus", [])
     ]
-    l1_controllers = [
-        cntrl
+    l1i_controllers = [
+        getattr(cpu, "l1i")
         for cpu in cpus
-        for cntrl in (getattr(cpu, "l1i", None), getattr(cpu, "l1d", None))
-        if cntrl is not None
+        if getattr(cpu, "l1i", None) is not None
+    ]
+    l1d_controllers = [
+        getattr(cpu, "l1d")
+        for cpu in cpus
+        if getattr(cpu, "l1d", None) is not None
     ]
     l2_controllers = [
         getattr(cpu, "l2")
@@ -192,12 +196,17 @@ def configure_custom_route_table(
             configured_node_ids.add(node_id)
 
     add_indexed(
-        "RNF",
-        l1_controllers,
-        lambda idx: chiplet_by_index(idx // 2, max(1, len(cpus) // 2)),
+        "L1I",
+        l1i_controllers,
+        lambda idx: chiplet_by_index(idx, max(1, len(cpus) // 2)),
     )
     add_indexed(
-        "L2",
+        "L1D",
+        l1d_controllers,
+        lambda idx: chiplet_by_index(idx, max(1, len(cpus) // 2)),
+    )
+    add_indexed(
+        "RNF",
         l2_controllers,
         lambda idx: chiplet_by_index(idx, max(1, len(l2_controllers) // 2)),
     )
