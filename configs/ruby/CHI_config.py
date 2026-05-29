@@ -822,6 +822,12 @@ class CHI_HNF(CHI_Node):
         assert len(cls._addr_ranges) != 0
         return cls._addr_ranges[hnf_idx]
 
+    @classmethod
+    def setAddrRanges(cls, hnf_idx, addr_ranges, start_index_bit):
+        assert len(addr_ranges) >= 1
+        assert start_index_bit > 0
+        cls._addr_ranges[hnf_idx] = (addr_ranges, start_index_bit - 1)
+
     # The CHI controller can be a child of this object or another if
     # 'parent' if specified
     def __init__(self, hnf_idx, ruby_system, llcache_type, parent):

@@ -378,7 +378,20 @@ in_port(reqInPort, CHIRequestMsg, reqIn, rank=2,
       // DVM Sync and TLBIs from external sources will use txnId requests,
       // but they aren't implemented yet.
       assert(!in_msg.usesTxnId);
-      if (in_msg.allowRetry) {
+      if (is_AAN && (aan_amo_policy == 0) &&
+          (in_msg.type == CHIRequestType:AtomicReturn)) {
+        enqueue(reqOutPort, CHIRequestMsg, request_latency) {
+          out_msg := in_msg;
+          // In bypass mode AAN is a pure transparent hop. HN-F responds to
+          // the original requester, and this controller allocates no TBE.
+          out_msg.requestor := in_msg.requestor;
+          out_msg.fwdRequestor := in_msg.requestor;
+          out_msg.allowRetry := true;
+          out_msg.Destination.clear();
+          out_msg.Destination.add(mapAddressToDownstreamMachine(in_msg.addr));
+        }
+        reqInPort.dequeue(clockEdge());
+      } else if (in_msg.allowRetry) {
         trigger(Event:AllocRequest, in_msg.addr,
               getCacheEntry(in_msg.addr), getCurrentActiveTBE(in_msg.addr));
       } else {

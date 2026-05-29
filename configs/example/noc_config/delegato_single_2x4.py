@@ -47,6 +47,40 @@ No cross-chiplet links (single die).
 from ruby import CHI_config
 
 
+MAIN_MEM_MIN = 0x0
+MAIN_MEM_MAX = 0x280000000
+BOOT_MEM_MIN = 0x0
+BOOT_MEM_MAX = 0x4000000
+MN_MIN = 0x0
+MN_MAX = 0x400
+
+NODE_ID_BASE = {
+    "RNF": 0,
+    "L2": 8,
+    "HNF": 12,
+    "AAN": 16,
+    "SNF": 20,
+    "BOOT_SNF": 22,
+    "MN": 23,
+    "RNI": 24,
+}
+
+OPTIONAL_ROUTE_NODE_IDS = (NODE_ID_BASE["BOOT_SNF"],)
+SINGLE_DIE = True
+
+route_table = [
+    ("MN", MN_MIN, MN_MAX, 0x0, 0x0, 23),
+    ("SNF", BOOT_MEM_MIN, BOOT_MEM_MAX, 0x0, 0x0, 22),
+
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0xc0, 0x0, 12),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0xc0, 0x40, 13),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0xc0, 0x80, 14),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0xc0, 0xc0, 15),
+
+    ("SNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x40, 0x0, 20),
+    ("SNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x40, 0x40, 21),
+]
+
 class NoC_Params(CHI_config.NoC_Params):
     num_rows = 2
     num_cols = 4
@@ -66,9 +100,6 @@ class CHI_HNF(CHI_config.CHI_HNF):
     """4 LLC/directory slices co-located with cores."""
     class NoC_Params(CHI_config.CHI_HNF.NoC_Params):
         router_list = _core_routers
-        # Optional HNF address-map override.
-        # Example for 4 HNFs: CHI_config.AddrMap(intlv_low_bit=8) -> PA[9:8]
-        addr_map = None
 
 
 class CHI_MN(CHI_config.CHI_MN):
@@ -81,10 +112,6 @@ class CHI_SNF_MainMem(CHI_config.CHI_SNF_MainMem):
     """2 memory channels on col 0."""
     class NoC_Params(CHI_config.CHI_SNF_MainMem.NoC_Params):
         router_list = _mem_routers
-        # Optional SNF address-map override.
-        # Example for 2 SNFs: CHI_config.AddrMap(intlv_low_bit=8, xor_low_bit=0)
-        # -> use PA[8] without XOR hashing.
-        addr_map = None
 
 
 class CHI_SNF_BootMem(CHI_config.CHI_SNF_BootMem):

@@ -33,6 +33,11 @@ Default parameters match the Delegato paper (MICRO '25, Table 3).
 Modes of operation:
   Normal:       gem5.opt delegato_fs.py --kernel <Image> --initrd <cpio.gz> --cpu <timing|minor|hpi|o3>
                 Boot and run on the same CPU from start to finish.
+  Checkpoint:   gem5.opt delegato_fs.py --kernel <Image> --initrd <cpio.gz> --timing-checkpoint --cpu <timing|minor|hpi|o3>
+                Boot to the workload ROI on TimingSimpleCPU, switch to the
+                target CPU, reset stats, then save a checkpoint.
+  Restore:      gem5.opt delegato_fs.py --kernel <Image> --initrd <cpio.gz> --timing-checkpoint --restore-checkpoint <dir> --cpu <timing|minor|hpi|o3>
+                Restore a checkpoint produced by Checkpoint mode and continue.
   Bare-metal:   gem5.opt delegato_fs.py --bare-metal <elf> --cpu timing
                 Boot bare-metal ELF directly (no Linux kernel).  The ELF
                 must be linked at 0x80080000 (VExpress physical RAM + 512K).
@@ -54,6 +59,7 @@ m5.util.addToPath("../..")
 
 import devices
 from common import (
+    ObjectList,
     SysPaths,
 )
 from common.cores.arm import (
@@ -61,7 +67,14 @@ from common.cores.arm import (
     O3_ARM_v7a,
 )
 from ruby import Ruby
-from amo_policy import add_amo_policy_args, resolve_amo_policy
+from amo_policy import (
+    add_amo_policy_args,
+    resolve_amo_policy,
+)
+from delegato_routing_helper import (
+    cache_chiplet_map_from_route_nodes,
+    configure_system_route_helpers,
+)
 
 
 # ─── O3 CPU tuned to Delegato paper Table 3 ─────────────────────────────
@@ -117,12 +130,39 @@ def _set_cpu_heartbeat(system, heartbeat_insts):
         cpu.heartbeat_insts = heartbeat_insts
 
 
+def _make_switch_cpus(
+    system, target_cpu_class, heartbeat_insts, switched_out=True
+):
+    switch_cpus = []
+    for old_cpu in _get_boot_cpus(system):
+        new_cpu = target_cpu_class(
+            switched_out=switched_out,
+            cpu_id=old_cpu.cpu_id,
+            clk_domain=old_cpu.clk_domain,
+        )
+        new_cpu.socket_id = old_cpu.socket_id
+        new_cpu.workload = old_cpu.workload
+        new_cpu.isa = old_cpu.isa
+        new_cpu.progress_interval = old_cpu.progress_interval
+        new_cpu.heartbeat_insts = heartbeat_insts
+        new_cpu.createThreads()
+        new_cpu.createInterruptController()
+        switch_cpus.append(new_cpu)
+    system.switch_cpus = switch_cpus
+    return switch_cpus
+
+
+def _get_switch_cpu_list(system):
+    return list(zip(_get_boot_cpus(system), system.switch_cpus))
+
+
 # ─── System creation ─────────────────────────────────────────────────────
 
 def create(args):
     """Create and configure the system."""
 
-    boot_cpu_class = cpu_types[args.cpu]
+    target_cpu_class = cpu_types[args.cpu]
+    boot_cpu_class = TimingSimpleCPU if args.timing_checkpoint else target_cpu_class
 
     mem_mode = boot_cpu_class.memory_mode()
 
@@ -174,6 +214,18 @@ def create(args):
         for cpu in cluster.cpus:
             cpus.append(cpu)
 
+    switch_cpus = None
+    if args.timing_checkpoint and target_cpu_class is not boot_cpu_class:
+        switch_cpus = _make_switch_cpus(
+            system,
+            target_cpu_class,
+            args.heartbeat_insts,
+            switched_out=not args.restore_checkpoint,
+        )
+        if args.restore_checkpoint:
+            for cpu in cpus:
+                cpu.switched_out = True
+
     Ruby.create_system(
         args,
         True,
@@ -183,7 +235,10 @@ def create(args):
         system.realview.bootmem,
         cpus,
     )
-    system._ruby_cpu_port_targets = cpus
+    if args.restore_checkpoint and switch_cpus is not None:
+        system._ruby_cpu_port_targets = switch_cpus
+    else:
+        system._ruby_cpu_port_targets = cpus
 
     block_size_bits = int(math.log(args.cacheline_size, 2))
     if (1 << block_size_bits) != args.cacheline_size:
@@ -199,72 +254,38 @@ def create(args):
           % (policy.top_policy, policy.l1d_policy,
              policy.aan_policy, policy.hnf_policy))
 
-    aan_controllers = [
-        cntrl
-        for aan in getattr(system.ruby, "aan", [])
-        for cntrl in aan.getAllControllers()
-    ]
-    aan_enabled = policy.aan_enabled
-    aan_base_cache_id = (
-        min(int(cntrl.version) for cntrl in aan_controllers)
-        if aan_controllers else 0
-    )
-    aan_rows = 4
-    hnf_count = max(1, len(getattr(system.ruby, "hnf", [])))
-    hnf_select_bits = int(math.log(hnf_count, 2))
-    if (1 << hnf_select_bits) != hnf_count:
-        m5.fatal("AAN dispatch requires a power-of-two HNF count")
+    try:
+        node_id_to_chiplet = cache_chiplet_map_from_route_nodes(system.ruby)
+    except ValueError as exc:
+        m5.fatal(str(exc))
 
-    # Single-die: all cores in one chiplet; dual-chiplet: split evenly
-    single_die = args.num_cpus <= 4
-    cores_per_chiplet = args.num_cpus if single_die else max(1, args.num_cpus // 2)
-    hnfs_per_chiplet = hnf_count if single_die else max(1, hnf_count // 2)
-    hnfs_per_row = max(1, hnfs_per_chiplet // aan_rows)
-    node_id_to_chiplet = []
-
-    def set_node_chiplet(node_id, chiplet_id):
-        node_id = int(node_id)
-        while len(node_id_to_chiplet) <= node_id:
-            node_id_to_chiplet.append(-1)
-        if node_id_to_chiplet[node_id] not in (-1, chiplet_id):
-            m5.fatal(
-                "conflicting Delegato chiplet mapping for NodeID "
-                f"{node_id}: {node_id_to_chiplet[node_id]} vs {chiplet_id}"
-            )
-        node_id_to_chiplet[node_id] = chiplet_id
-
-    for cpu_idx, cpu in enumerate(cpus):
-        cpu_chiplet_id = 0 if single_die else min(1, cpu_idx // cores_per_chiplet)
+    for cpu in cpus:
         cpu.l1d.l1d_amo_policy = policy.l1d_policy_code
-        cpu.l1d.aan_amo_policy = policy.aan_policy_code
         cpu.l1d.hnf_amo_policy = policy.hnf_policy_code
         cpu.l1d.delegato_rt_enabled = policy.delegato_rt_enabled
         cpu.l1d.cache_block_size_bits = block_size_bits
         cpu.l1d.delegato_rt_entries = 128
         cpu.l1d.delegato_rt_assoc = 2
-        cpu.l1d.aan_enabled = aan_enabled
-        cpu.l1d.aan_base_cache_id = aan_base_cache_id
-        cpu.l1d.aan_num_nodes = len(aan_controllers)
-        cpu.l1d.aan_rows = aan_rows
-        cpu.l1d.aan_requester_chiplet_id = cpu_chiplet_id
-        cpu.l1d.aan_hnfs_per_chiplet = hnfs_per_chiplet
-        cpu.l1d.aan_hnfs_per_row = hnfs_per_row
-        cpu.l1d.aan_hnf_select_bits = hnf_select_bits
-        set_node_chiplet(cpu.l1d.version, cpu_chiplet_id)
         if hasattr(cpu, "l2"):
-            set_node_chiplet(cpu.l2.version, cpu_chiplet_id)
+            cpu.l2.hnf_amo_policy = policy.hnf_policy_code
+            cpu.l2.cache_block_size_bits = block_size_bits
 
-    hnf_idx = 0
     for hnf in system.ruby.hnf:
         for cntrl in hnf.getAllControllers():
-            hnf_chiplet_id = 0 if single_die or hnf_idx < hnfs_per_chiplet else 1
+            version = int(cntrl.version)
+            if (
+                version >= len(node_id_to_chiplet) or
+                node_id_to_chiplet[version] < 0
+            ):
+                m5.fatal(
+                    "custom route node metadata has no HNF Cache version %d",
+                    version,
+                )
             cntrl.hnf_amo_policy = policy.hnf_policy_code
             cntrl.delegato_pt_entries = 128
             cntrl.delegato_pt_assoc = 2
             cntrl.cache_block_size_bits = block_size_bits
-            cntrl.hnf_chiplet_id = hnf_chiplet_id
-            set_node_chiplet(cntrl.version, hnf_chiplet_id)
-            hnf_idx += 1
+            cntrl.hnf_chiplet_id = node_id_to_chiplet[version]
 
     for aan in getattr(system.ruby, "aan", []):
         for cntrl in aan.getAllControllers():
@@ -273,17 +294,6 @@ def create(args):
             cntrl.cache_block_size_bits = block_size_bits
             cntrl.aan_bat_entries = 128
             cntrl.aan_bat_assoc = 2
-            for attr in ("aan_nofilter", "aan_bat_nofilter", "aan_disable_filter"):
-                if attr in cntrl.__class__._params:
-                    setattr(cntrl, attr, policy.aan_nofilter)
-            if len(aan_controllers) > 0:
-                aan_idx = int(cntrl.version) - aan_base_cache_id
-                aan_per_chiplet = (
-                    len(aan_controllers) if single_die
-                    else max(1, len(aan_controllers) // 2)
-                )
-                aan_chiplet_id = 0 if single_die else min(1, aan_idx // aan_per_chiplet)
-                set_node_chiplet(cntrl.version, aan_chiplet_id)
 
     for hnf in system.ruby.hnf:
         for cntrl in hnf.getAllControllers():
@@ -338,6 +348,8 @@ def create(args):
         if args.initrd:
             kernel_cmd.append("rdinit=/init")
         kernel_cmd.append("gem5_m5ops_mmio=1")
+        if args.timing_checkpoint:
+            kernel_cmd.append("gem5_roi_checkpoint=1")
         kernel_cmd.append("iomem=relaxed")
 
         system.workload.command_line = " ".join(kernel_cmd)
@@ -351,6 +363,21 @@ def run(args, root):
     while True:
         event = m5.simulate()
         exit_msg = event.getCause()
+
+        if exit_msg == "checkpoint":
+            if not args.timing_checkpoint:
+                m5.fatal("unexpected checkpoint event outside --timing-checkpoint")
+            if args.restore_checkpoint:
+                m5.fatal("unexpected checkpoint event after restore")
+            if hasattr(root.system, "switch_cpus"):
+                print("Switching from timing CPU to %s CPU @ tick %d"
+                      % (args.cpu, m5.curTick()))
+                m5.switchCpus(root.system, _get_switch_cpu_list(root.system))
+            m5.stats.reset()
+            print("Stats reset before checkpoint @ tick %d" % m5.curTick())
+            m5.checkpoint(args.checkpoint_dir)
+            print("Timing ROI checkpoint saved: %s" % args.checkpoint_dir)
+            sys.exit(0)
 
         if exit_msg == "m5_exit instruction encountered":
             print(f"Simulation complete @ tick {m5.curTick()}")
@@ -378,6 +405,13 @@ def main():
                              "Mutually exclusive with --kernel/--initrd.")
     parser.add_argument("--initrd", type=str, default=None,
                         help="Path to initrd/initramfs (cpio.gz)")
+    parser.add_argument("--timing-checkpoint", action="store_true",
+                        help="Boot with TimingSimpleCPU until ROI, switch to "
+                             "--cpu, reset stats, and save --checkpoint-dir.")
+    parser.add_argument("--checkpoint-dir", type=str, default=None,
+                        help="Directory used by --timing-checkpoint.")
+    parser.add_argument("--restore-checkpoint", type=str, default=None,
+                        help="Restore from a timing checkpoint directory.")
     parser.add_argument("--disk-image", type=str, default=None,
                         help="Path to disk image (optional)")
     parser.add_argument("--dtb", type=str, default=None,
@@ -441,6 +475,13 @@ def main():
             parser.error("--bare-metal and --initrd are mutually exclusive")
     elif not args.kernel:
         parser.error("--kernel is required (unless --bare-metal is specified)")
+    if args.restore_checkpoint and not args.timing_checkpoint:
+        parser.error("--restore-checkpoint requires --timing-checkpoint")
+    if args.timing_checkpoint:
+        if args.bare_metal:
+            parser.error("--timing-checkpoint requires Linux workload mode")
+        if not args.restore_checkpoint and not args.checkpoint_dir:
+            parser.error("--timing-checkpoint requires --checkpoint-dir")
 
     # Force topology and CHI config for Delegato
     # Explicit dispatch: 4 => 2x4, 16 => 4x8, 32 => 4x12
@@ -454,12 +495,11 @@ def main():
         args.aan_amo_policy,
         args.hnf_amo_policy,
     )
-    if policy.aan_enabled and args.num_cpus not in (16, 32):
+    if policy.aan_policy != "bypass" and args.num_cpus not in (16, 32):
         parser.error(
             "AAN policies require --num-cpus 16 or 32 because AAN nodes are "
             "only defined in delegato_4x8.py and delegato_4x12.py"
         )
-
     if args.num_cpus == 4:
         noc_name = "delegato_single_2x4.py"
         args.num_l3caches = 4
@@ -486,11 +526,20 @@ def main():
     args.chi_config = noc_config
     args.network = "garnet"
     args.ruby_clock = "2GHz"
+    args.enable_custom_route_table = True
+    configure_system_route_helpers(
+        args, args.chi_config, single_die=(args.num_cpus == 4)
+    )
 
     root = Root(full_system=True)
     root.system = create(args)
 
-    m5.instantiate()
+    m5.instantiate(args.restore_checkpoint)
+    if args.restore_checkpoint:
+        m5.stats.reset()
+        print("Restored checkpoint: %s" % args.restore_checkpoint)
+        print("Continuing on %s CPU @ tick %d" % (args.cpu, m5.curTick()))
+        print("Stats reset after restore @ tick %d" % m5.curTick())
 
     run(args, root)
 

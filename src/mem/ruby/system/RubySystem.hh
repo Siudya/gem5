@@ -35,6 +35,10 @@
 #ifndef __MEM_RUBY_SYSTEM_RUBYSYSTEM_HH__
 #define __MEM_RUBY_SYSTEM_RUBYSYSTEM_HH__
 
+#include <cstdint>
+#include <list>
+#include <map>
+#include <string>
 #include <unordered_map>
 
 #include "base/callback.hh"
@@ -75,6 +79,8 @@ class RubySystem : public ClockedObject
     uint32_t getMemorySizeBits() { return m_memory_size_bits; }
     bool getWarmupEnabled() { return m_warmup_enabled; }
     bool getCooldownEnabled() { return m_cooldown_enabled; }
+    bool getCustomRouteTableEnabled() const
+    { return m_enable_custom_route_table; }
 
     memory::SimpleMemory *getPhysMem() { return m_phys_mem; }
     Cycles getStartCycle() { return m_start_cycle; }
@@ -121,6 +127,11 @@ class RubySystem : public ClockedObject
 
     const ProtocolInfo& getProtocolInfo() { return *protocolInfo; }
 
+    MachineID routeAddressToMachine(const std::string &table, Addr addr) const;
+    const std::string &routeMachineRole(const MachineID &machine) const;
+    bool shouldRouteAddressToAAN(
+        Addr addr, const MachineID &requester) const;
+
   private:
     // Private copy constructor and assignment operator
     RubySystem(const RubySystem& obj);
@@ -143,6 +154,55 @@ class RubySystem : public ClockedObject
     bool simpleFunctionalRead(PacketPtr pkt);
     bool partialFunctionalRead(PacketPtr pkt);
 
+    class AddressTableEntry
+    {
+      public:
+        Addr min = 0;
+        Addr max = MaxAddr;
+        Addr mask = 0;
+        Addr compare = 0;
+        int64_t id = -1;
+
+        bool operator==(const AddressTableEntry &that) const;
+        bool matches(Addr addr) const;
+    };
+
+    class AddressTable
+    {
+      public:
+        void addEntry(const AddressTableEntry &entry,
+                      const std::string &table_name);
+        int64_t query(Addr addr) const;
+        bool contains(Addr addr) const { return query(addr) >= 0; }
+
+      private:
+        std::list<AddressTableEntry> entries;
+    };
+
+    class RouteTable
+    {
+      public:
+        void addEntry(const std::string &table,
+                      const AddressTableEntry &entry);
+        int64_t query(const std::string &table, Addr addr) const;
+        bool contains(const std::string &table, Addr addr) const;
+        bool empty() const { return tables.empty(); }
+
+      private:
+        std::unordered_map<std::string, AddressTable> tables;
+    };
+
+    struct RouteNode
+    {
+        MachineID machine;
+        std::string role;
+        int chiplet = -1;
+    };
+
+    void initRouteTable(const Params &p);
+    MachineID nodeIdToMachineID(int64_t node_id) const;
+    int machineChiplet(const MachineID &machine) const;
+
   private:
     // configuration parameters
     bool m_randomization;
@@ -155,6 +215,7 @@ class RubySystem : public ClockedObject
     memory::SimpleMemory *m_phys_mem;
     const bool m_access_backing_store;
     const bool m_skip_warmup_restore;
+    const bool m_enable_custom_route_table;
 
     //std::vector<Network *> m_networks;
     std::vector<std::unique_ptr<Network>> m_networks;
@@ -166,6 +227,10 @@ class RubySystem : public ClockedObject
     std::unordered_map<unsigned, std::vector<AbstractController*>> netCntrls;
 
     std::unique_ptr<ProtocolInfo> protocolInfo;
+    RouteTable routeTable;
+    std::map<int64_t, RouteNode> routeNodes;
+    std::unordered_map<MachineID, int64_t> machineToRouteNode;
+    bool routeTableInitialized = false;
 
   public:
     Profiler* m_profiler;

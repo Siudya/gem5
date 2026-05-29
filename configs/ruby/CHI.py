@@ -34,6 +34,8 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import m5
+import os
+import sys
 from m5.defines import buildEnv
 from m5.objects import *
 
@@ -50,6 +52,12 @@ def define_options(parser):
         "Required for CustomMesh topology",
     )
     parser.add_argument("--enable-dvm", default=False, action="store_true")
+    parser.add_argument(
+        "--enable-custom-route-table",
+        default=False,
+        action="store_true",
+        help="Use the route table supplied by the CHI NoC config",
+    )
 
 
 def read_config_file(file):
@@ -57,9 +65,14 @@ def read_config_file(file):
     import importlib.machinery
     import types
 
+    config_dir = os.path.dirname(os.path.abspath(file))
+    sys.path.insert(0, config_dir)
     loader = importlib.machinery.SourceFileLoader("chi_configs", file)
     chi_configs = types.ModuleType(loader.name)
-    loader.exec_module(chi_configs)
+    try:
+        loader.exec_module(chi_configs)
+    finally:
+        sys.path.remove(config_dir)
     return chi_configs
 
 
@@ -102,11 +115,6 @@ def create_system(
     CHI_RNI_DMA = chi_defs.CHI_RNI_DMA
     CHI_RNI_IO = chi_defs.CHI_RNI_IO
     CHI_AAN = getattr(chi_defs, "CHI_AAN", None)
-    resolve_addr_map = getattr(chi_defs, "resolve_addr_map", None)
-    if resolve_addr_map is None:
-        base_chi_config = getattr(chi_defs, "CHI_config", None)
-        if base_chi_config is not None:
-            resolve_addr_map = getattr(base_chi_config, "resolve_addr_map", None)
 
     class HNFCache(RubyCache):
         dataAccessLatency = 10
@@ -167,10 +175,19 @@ def create_system(
         sysranges.append(m.range)
 
     hnf_list = [i for i in range(options.num_l3caches)]
-    hnf_addr_map = getattr(CHI_HNF.NoC_Params, "addr_map", None)
-    CHI_HNF.createAddrRanges(
-        sysranges, system.cache_line_size.value, hnf_list, hnf_addr_map
-    )
+    if getattr(options, "enable_custom_route_table", False):
+        create_hnf_ranges = getattr(options, "_create_custom_hnf_ranges",
+                                    None)
+        if create_hnf_ranges is None:
+            m5.fatal(
+                "--enable-custom-route-table requires the caller to install "
+                "custom route helper callbacks"
+            )
+        create_hnf_ranges(CHI_HNF, sysranges, hnf_list)
+    else:
+        CHI_HNF.createAddrRanges(
+            sysranges, system.cache_line_size.value, hnf_list
+        )
     ruby_system.hnf = [
         CHI_HNF(i, ruby_system, HNFCache, None)
         for i in range(options.num_l3caches)
@@ -183,14 +200,8 @@ def create_system(
         all_cntrls.extend(hnf.getAllControllers())
         hnf_dests.extend(hnf.getAllControllers())
 
-    aan_policy = getattr(options, "aan_amo_policy", None)
-    if aan_policy is None:
-        aan_policy = {
-            "dynaan": "near",
-            "dynaan-filter": "filter",
-        }.get(getattr(options, "amo_policy", None), "bypass")
     aan_nodes = []
-    if aan_policy != "bypass" and CHI_AAN is not None:
+    if CHI_AAN is not None:
         aan_cb = getattr(system, "_aan_gen", CHI_AAN.generate)
         aan_nodes = aan_cb(options, ruby_system, cpus)
         if aan_nodes:
@@ -203,21 +214,6 @@ def create_system(
     # Create the memory controllers
     # Notice we don't define a Directory_Controller type so we don't use
     # create_directories shared by other protocols.
-
-    snf_addr_map = getattr(CHI_SNF_MainMem.NoC_Params, "addr_map", None)
-    options.snf_addr_map = None
-    if snf_addr_map is not None:
-        if resolve_addr_map is None:
-            m5.fatal(
-                "CHI config module must expose resolve_addr_map directly or via CHI_config"
-            )
-        options.snf_addr_map = resolve_addr_map(
-            snf_addr_map,
-            options.num_dirs,
-            system.cache_line_size.value,
-            options.xor_low_bit,
-            "SNF",
-        )
 
     ruby_system.snf = [
         CHI_SNF_MainMem(ruby_system, None, None)
@@ -270,6 +266,17 @@ def create_system(
         aan.setDownstream(hnf_dests)
     for hnf in ruby_system.hnf:
         hnf.setDownstream(mem_dests)
+
+    if getattr(options, "enable_custom_route_table", False):
+        configure_routes = getattr(options, "_configure_custom_route_table",
+                                   None)
+        if configure_routes is None:
+            m5.fatal(
+                "--enable-custom-route-table requires the caller to install "
+                "custom route helper callbacks"
+            )
+        ruby_system.enable_custom_route_table = True
+        configure_routes(ruby_system, system)
 
     # Setup data message size for all controllers
     for cntrl in all_cntrls:

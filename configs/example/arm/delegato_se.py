@@ -16,7 +16,14 @@ m5.util.addToPath("../..")
 from common import ObjectList
 from common.cores.arm import HPI, O3_ARM_v7a
 from ruby import Ruby
-from amo_policy import add_amo_policy_args, resolve_amo_policy
+from amo_policy import (
+    add_amo_policy_args,
+    resolve_amo_policy,
+)
+from delegato_routing_helper import (
+    cache_chiplet_map_from_route_nodes,
+    configure_system_route_helpers,
+)
 
 
 class DelegatoO3CPU(O3_ARM_v7a.O3_ARM_v7a_3):
@@ -85,7 +92,7 @@ def _configure_topology(args, parser):
         args.aan_amo_policy,
         args.hnf_amo_policy,
     )
-    if policy.aan_enabled and args.num_cpus not in (16, 32):
+    if policy.aan_policy != "bypass" and args.num_cpus not in (16, 32):
         parser.error("AAN policies require --num-cpus 16 or 32")
 
     if args.num_cpus == 4:
@@ -113,6 +120,10 @@ def _configure_topology(args, parser):
     )
     args.network = "garnet"
     args.ruby_clock = "2GHz"
+    args.enable_custom_route_table = True
+    configure_system_route_helpers(
+        args, args.chi_config, single_die=(args.num_cpus == 4)
+    )
 
 
 def _apply_amo_policy(system, args):
@@ -136,71 +147,38 @@ def _apply_amo_policy(system, args):
     if (1 << block_size_bits) != args.cacheline_size:
         m5.fatal("--cacheline_size must be a power of 2")
 
-    aan_controllers = [
-        cntrl
-        for aan in getattr(system.ruby, "aan", [])
-        for cntrl in aan.getAllControllers()
-    ]
-    aan_enabled = policy.aan_enabled
-    aan_base_cache_id = (
-        min(int(cntrl.version) for cntrl in aan_controllers)
-        if aan_controllers else 0
-    )
-    aan_rows = 4
-    hnf_count = max(1, len(getattr(system.ruby, "hnf", [])))
-    hnf_select_bits = int(math.log(hnf_count, 2))
-    if (1 << hnf_select_bits) != hnf_count:
-        m5.fatal("AAN dispatch requires a power-of-two HNF count")
+    try:
+        node_id_to_chiplet = cache_chiplet_map_from_route_nodes(system.ruby)
+    except ValueError as exc:
+        m5.fatal(str(exc))
 
-    single_die = args.num_cpus <= 4
-    cores_per_chiplet = args.num_cpus if single_die else max(1, args.num_cpus // 2)
-    hnfs_per_chiplet = hnf_count if single_die else max(1, hnf_count // 2)
-    hnfs_per_row = max(1, hnfs_per_chiplet // aan_rows)
-    node_id_to_chiplet = []
-
-    def set_node_chiplet(node_id, chiplet_id):
-        node_id = int(node_id)
-        while len(node_id_to_chiplet) <= node_id:
-            node_id_to_chiplet.append(-1)
-        if node_id_to_chiplet[node_id] not in (-1, chiplet_id):
-            m5.fatal(
-                "conflicting Delegato chiplet mapping for NodeID "
-                f"{node_id}: {node_id_to_chiplet[node_id]} vs {chiplet_id}"
-            )
-        node_id_to_chiplet[node_id] = chiplet_id
-
-    for cpu_idx, cpu in enumerate(system.cpu):
-        cpu_chiplet_id = 0 if single_die else min(1, cpu_idx // cores_per_chiplet)
+    for cpu in system.cpu:
         cpu.l1d.l1d_amo_policy = policy.l1d_policy_code
-        cpu.l1d.aan_amo_policy = policy.aan_policy_code
         cpu.l1d.hnf_amo_policy = policy.hnf_policy_code
         cpu.l1d.delegato_rt_enabled = policy.delegato_rt_enabled
         cpu.l1d.cache_block_size_bits = block_size_bits
         cpu.l1d.delegato_rt_entries = 128
         cpu.l1d.delegato_rt_assoc = 2
-        cpu.l1d.aan_enabled = aan_enabled
-        cpu.l1d.aan_base_cache_id = aan_base_cache_id
-        cpu.l1d.aan_num_nodes = len(aan_controllers)
-        cpu.l1d.aan_rows = aan_rows
-        cpu.l1d.aan_requester_chiplet_id = cpu_chiplet_id
-        cpu.l1d.aan_hnfs_per_chiplet = hnfs_per_chiplet
-        cpu.l1d.aan_hnfs_per_row = hnfs_per_row
-        cpu.l1d.aan_hnf_select_bits = hnf_select_bits
-        set_node_chiplet(cpu.l1d.version, cpu_chiplet_id)
         if hasattr(cpu, "l2"):
-            set_node_chiplet(cpu.l2.version, cpu_chiplet_id)
+            cpu.l2.hnf_amo_policy = policy.hnf_policy_code
+            cpu.l2.cache_block_size_bits = block_size_bits
 
-    hnf_idx = 0
     for hnf in system.ruby.hnf:
         for cntrl in hnf.getAllControllers():
-            hnf_chiplet_id = 0 if single_die or hnf_idx < hnfs_per_chiplet else 1
+            version = int(cntrl.version)
+            if (
+                version >= len(node_id_to_chiplet) or
+                node_id_to_chiplet[version] < 0
+            ):
+                m5.fatal(
+                    "custom route node metadata has no HNF Cache version %d",
+                    version,
+                )
             cntrl.hnf_amo_policy = policy.hnf_policy_code
             cntrl.delegato_pt_entries = 128
             cntrl.delegato_pt_assoc = 2
             cntrl.cache_block_size_bits = block_size_bits
-            cntrl.hnf_chiplet_id = hnf_chiplet_id
-            set_node_chiplet(cntrl.version, hnf_chiplet_id)
-            hnf_idx += 1
+            cntrl.hnf_chiplet_id = node_id_to_chiplet[version]
 
     for aan in getattr(system.ruby, "aan", []):
         for cntrl in aan.getAllControllers():
@@ -209,17 +187,6 @@ def _apply_amo_policy(system, args):
             cntrl.cache_block_size_bits = block_size_bits
             cntrl.aan_bat_entries = 128
             cntrl.aan_bat_assoc = 2
-            for attr in ("aan_nofilter", "aan_bat_nofilter", "aan_disable_filter"):
-                if attr in cntrl.__class__._params:
-                    setattr(cntrl, attr, policy.aan_nofilter)
-            if len(aan_controllers) > 0:
-                aan_idx = int(cntrl.version) - aan_base_cache_id
-                aan_per_chiplet = (
-                    len(aan_controllers) if single_die
-                    else max(1, len(aan_controllers) // 2)
-                )
-                aan_chiplet_id = 0 if single_die else min(1, aan_idx // aan_per_chiplet)
-                set_node_chiplet(cntrl.version, aan_chiplet_id)
 
     for hnf in system.ruby.hnf:
         for cntrl in hnf.getAllControllers():

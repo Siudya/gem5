@@ -44,6 +44,8 @@
 #include <zlib.h>
 
 #include <cstdio>
+#include <sstream>
+#include <stdexcept>
 #include <list>
 
 #include "base/compiler.hh"
@@ -71,7 +73,9 @@ namespace ruby
 
 RubySystem::RubySystem(const Params &p)
     : ClockedObject(p), m_access_backing_store(p.access_backing_store),
-      m_skip_warmup_restore(p.skip_warmup_restore), m_cache_recorder(NULL)
+      m_skip_warmup_restore(p.skip_warmup_restore),
+      m_enable_custom_route_table(p.enable_custom_route_table),
+      m_cache_recorder(NULL)
 {
     m_randomization = p.randomization;
 
@@ -88,6 +92,250 @@ RubySystem::RubySystem(const Params &p)
     // Create the profiler
     m_profiler = new Profiler(p, this);
     m_phys_mem = p.phys_mem;
+}
+
+bool
+RubySystem::AddressTableEntry::operator==(const AddressTableEntry &that) const
+{
+    return min == that.min && max == that.max && mask == that.mask &&
+           compare == that.compare && id == that.id;
+}
+
+bool
+RubySystem::AddressTableEntry::matches(Addr addr) const
+{
+    return min <= addr && addr < max && ((addr & mask) == compare);
+}
+
+void
+RubySystem::AddressTable::addEntry(
+    const AddressTableEntry &entry, const std::string &table_name)
+{
+    for (const auto &existing : entries) {
+        fatal_if(
+            existing == entry,
+            "duplicate Ruby route table entry in %s: "
+            "[%#llx,%#llx) mask=%#llx compare=%#llx id=%lld",
+            table_name, entry.min, entry.max, entry.mask, entry.compare,
+            entry.id);
+    }
+    entries.push_back(entry);
+}
+
+int64_t
+RubySystem::AddressTable::query(Addr addr) const
+{
+    for (const auto &entry : entries) {
+        if (entry.matches(addr))
+            return entry.id;
+    }
+    return -1;
+}
+
+void
+RubySystem::RouteTable::addEntry(
+    const std::string &table, const AddressTableEntry &entry)
+{
+    tables[table].addEntry(entry, table);
+}
+
+int64_t
+RubySystem::RouteTable::query(const std::string &table, Addr addr) const
+{
+    const auto i = tables.find(table);
+    fatal_if(i == tables.end(), "Ruby route table %s is not configured",
+             table);
+
+    const int64_t id = i->second.query(addr);
+    fatal_if(id < 0, "Ruby route table %s has no entry for addr %#llx",
+             table, addr);
+    return id;
+}
+
+bool
+RubySystem::RouteTable::contains(const std::string &table, Addr addr) const
+{
+    const auto i = tables.find(table);
+    return i != tables.end() && i->second.contains(addr);
+}
+
+static uint64_t
+parseRouteUint(const std::string &text, const std::string &entry)
+{
+    try {
+        size_t pos = 0;
+        uint64_t value = std::stoull(text, &pos, 0);
+        fatal_if(pos != text.size(),
+                 "invalid Ruby route table integer '%s' in '%s'",
+                 text, entry);
+        return value;
+    } catch (const std::exception &) {
+        fatal("invalid Ruby route table integer '%s' in '%s'", text, entry);
+    }
+}
+
+static int64_t
+parseRouteInt(const std::string &text, const std::string &entry)
+{
+    try {
+        size_t pos = 0;
+        int64_t value = std::stoll(text, &pos, 0);
+        fatal_if(pos != text.size(),
+                 "invalid Ruby route table integer '%s' in '%s'",
+                 text, entry);
+        return value;
+    } catch (const std::exception &) {
+        fatal("invalid Ruby route table integer '%s' in '%s'", text, entry);
+    }
+}
+
+void
+RubySystem::initRouteTable(const Params &p)
+{
+    if (routeTableInitialized) {
+        return;
+    }
+    routeTableInitialized = true;
+
+    for (const auto &raw : p.route_node_entries) {
+        std::istringstream in(raw);
+        std::string id_s;
+        std::string type_s;
+        std::string version_s;
+        std::string role;
+        std::string chiplet_s;
+        std::string extra;
+        fatal_if(!(in >> id_s >> type_s >> version_s >> role >> chiplet_s) ||
+                 (in >> extra),
+                 "Ruby route node entry must be "
+                 "'node-id machine-type machine-version role chiplet-id': %s",
+                 raw);
+
+        int64_t node_id = parseRouteInt(id_s, raw);
+        MachineType type = string_to_MachineType(type_s);
+        NodeID version = parseRouteInt(version_s, raw);
+        int chiplet = parseRouteInt(chiplet_s, raw);
+        MachineID machine(type, version);
+
+        fatal_if(routeNodes.count(node_id),
+                 "duplicate Ruby route node id %lld", node_id);
+        fatal_if(machineToRouteNode.count(machine),
+                 "duplicate Ruby route node machine %s",
+                 MachineIDToString(machine));
+
+        routeNodes[node_id] = {machine, role, chiplet};
+        machineToRouteNode[machine] = node_id;
+    }
+
+    for (const auto &raw : p.route_table_entries) {
+        std::istringstream in(raw);
+        std::string table;
+        std::string min_s;
+        std::string max_s;
+        std::string mask_s;
+        std::string compare_s;
+        std::string id_s;
+        std::string extra;
+        fatal_if(!(in >> table >> min_s >> max_s >> mask_s >> compare_s >>
+                   id_s) || (in >> extra),
+                 "Ruby route table entry must be "
+                 "'table min max mask compare destination-node-id': %s",
+                 raw);
+
+        AddressTableEntry entry;
+        entry.min = parseRouteUint(min_s, raw);
+        entry.max = parseRouteUint(max_s, raw);
+        entry.mask = parseRouteUint(mask_s, raw);
+        entry.compare = parseRouteUint(compare_s, raw);
+        entry.id = parseRouteInt(id_s, raw);
+
+        fatal_if(entry.min >= entry.max,
+                 "Ruby route table entry has invalid range in '%s'", raw);
+        fatal_if((entry.compare & ~entry.mask) != 0,
+                 "Ruby route table entry compare has bits outside mask "
+                 "in '%s'", raw);
+        fatal_if(!routeNodes.count(entry.id),
+                 "Ruby route table entry targets unknown node id %lld "
+                 "in '%s'",
+                 entry.id, raw);
+
+        routeTable.addEntry(table, entry);
+    }
+
+    fatal_if(m_enable_custom_route_table && routeNodes.empty(),
+             "enable_custom_route_table requires route_node_entries");
+    fatal_if(m_enable_custom_route_table && routeTable.empty(),
+             "enable_custom_route_table requires route_table_entries");
+}
+
+MachineID
+RubySystem::nodeIdToMachineID(int64_t node_id) const
+{
+    const auto i = routeNodes.find(node_id);
+    fatal_if(i == routeNodes.end(),
+             "Ruby custom route target node id %lld is not configured",
+             node_id);
+    return i->second.machine;
+}
+
+int
+RubySystem::machineChiplet(const MachineID &machine) const
+{
+    const auto node_i = machineToRouteNode.find(machine);
+    fatal_if(node_i == machineToRouteNode.end(),
+             "Ruby route node metadata missing for machine %s",
+             MachineIDToString(machine));
+    const auto route_i = routeNodes.find(node_i->second);
+    fatal_if(route_i == routeNodes.end() || route_i->second.chiplet < 0,
+             "Ruby route node chiplet missing for machine %s",
+             MachineIDToString(machine));
+    return route_i->second.chiplet;
+}
+
+const std::string &
+RubySystem::routeMachineRole(const MachineID &machine) const
+{
+    const auto node_i = machineToRouteNode.find(machine);
+    fatal_if(node_i == machineToRouteNode.end(),
+             "Ruby route node metadata missing for machine %s",
+             MachineIDToString(machine));
+    const auto route_i = routeNodes.find(node_i->second);
+    fatal_if(route_i == routeNodes.end(),
+             "Ruby route node id %lld missing for machine %s",
+             node_i->second, MachineIDToString(machine));
+    return route_i->second.role;
+}
+
+MachineID
+RubySystem::routeAddressToMachine(const std::string &table, Addr addr) const
+{
+    fatal_if(!m_enable_custom_route_table,
+             "Ruby custom route table lookup requested while disabled");
+    return nodeIdToMachineID(routeTable.query(table, addr));
+}
+
+bool
+RubySystem::shouldRouteAddressToAAN(
+    Addr addr, const MachineID &requester) const
+{
+    if (!m_enable_custom_route_table || !routeTable.contains("AAN", addr)) {
+        return false;
+    }
+
+    const auto requester_i = machineToRouteNode.find(requester);
+    fatal_if(requester_i == machineToRouteNode.end(),
+             "Ruby route node metadata missing for requester %s",
+             MachineIDToString(requester));
+    const auto node_i = routeNodes.find(requester_i->second);
+    fatal_if(node_i == routeNodes.end(),
+             "Ruby route node id %lld missing for requester %s",
+             requester_i->second, MachineIDToString(requester));
+    if (node_i->second.role != "RNF" && node_i->second.role != "L2") {
+        return false;
+    }
+
+    MachineID hnf = routeAddressToMachine("HNF", addr);
+    return machineChiplet(requester) != machineChiplet(hnf);
 }
 
 void
@@ -437,6 +685,7 @@ RubySystem::unserialize(CheckpointIn &cp)
 void
 RubySystem::init()
 {
+    initRouteTable(params());
     registerRequestorIDs();
 }
 

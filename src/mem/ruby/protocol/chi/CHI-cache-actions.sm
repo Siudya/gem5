@@ -875,11 +875,7 @@ action(Initiate_AtomicReturn_I, desc="") {
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
   } else if (l1d_amo_policy == 1) {
-    if ((aan_amo_policy != 0) && shouldSendAtomicReturnToAAN(tbe.addr)) {
-      tbe.actions.push(Event:SendAtomicReturn_AAN);
-    } else {
-      tbe.actions.push(Event:SendAtomicReturn);
-    }
+    tbe.actions.push(Event:SendAtomicReturn);
     tbe.actions.push(Event:SendARData);
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
@@ -895,11 +891,7 @@ action(Initiate_AtomicReturn_I, desc="") {
       tbe.atomic_to_be_done := true;
     } else {
       // Far: send to HN or AAN, depending on the orthogonal AAN policy.
-      if ((aan_amo_policy != 0) && shouldSendAtomicReturnToAAN(tbe.addr)) {
-        tbe.actions.push(Event:SendAtomicReturn_AAN);
-      } else {
-        tbe.actions.push(Event:SendAtomicReturn);
-      }
+      tbe.actions.push(Event:SendAtomicReturn);
       tbe.actions.push(Event:SendARData);
       tbe.dataToBeInvalid := true;
       tbe.doCacheFill := false;
@@ -955,11 +947,7 @@ action(Initiate_AtomicReturn_SD, desc="") {
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
   } else if (l1d_amo_policy == 1) {
-    if ((aan_amo_policy != 0) && shouldSendAtomicReturnToAAN(tbe.addr)) {
-      tbe.actions.push(Event:SendAtomicReturn_AAN);
-    } else {
-      tbe.actions.push(Event:SendAtomicReturn);
-    }
+    tbe.actions.push(Event:SendAtomicReturn);
     tbe.actions.push(Event:SendARData);
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
@@ -975,11 +963,7 @@ action(Initiate_AtomicReturn_SD, desc="") {
       tbe.atomic_to_be_done := true;
     } else {
       // Far: send to HN or AAN, depending on the orthogonal AAN policy.
-      if ((aan_amo_policy != 0) && shouldSendAtomicReturnToAAN(tbe.addr)) {
-        tbe.actions.push(Event:SendAtomicReturn_AAN);
-      } else {
-        tbe.actions.push(Event:SendAtomicReturn);
-      }
+      tbe.actions.push(Event:SendAtomicReturn);
       tbe.actions.push(Event:SendARData);
       tbe.dataToBeInvalid := true;
       tbe.doCacheFill := false;
@@ -1033,11 +1017,7 @@ action(Initiate_AtomicReturn_SC, desc="") {
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
   } else if (l1d_amo_policy == 1) {
-    if ((aan_amo_policy != 0) && shouldSendAtomicReturnToAAN(tbe.addr)) {
-      tbe.actions.push(Event:SendAtomicReturn_AAN);
-    } else {
-      tbe.actions.push(Event:SendAtomicReturn);
-    }
+    tbe.actions.push(Event:SendAtomicReturn);
     tbe.actions.push(Event:SendARData);
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
@@ -1051,11 +1031,7 @@ action(Initiate_AtomicReturn_SC, desc="") {
       tbe.actions.push(Event:TagArrayWrite);
       tbe.atomic_to_be_done := true;
     } else {
-      if ((aan_amo_policy != 0) && shouldSendAtomicReturnToAAN(tbe.addr)) {
-        tbe.actions.push(Event:SendAtomicReturn_AAN);
-      } else {
-        tbe.actions.push(Event:SendAtomicReturn);
-      }
+      tbe.actions.push(Event:SendAtomicReturn);
       tbe.actions.push(Event:SendARData);
       tbe.dataToBeInvalid := true;
       tbe.doCacheFill := false;
@@ -1476,9 +1452,14 @@ action(Initiate_AtomicNoReturn_WriteBack, desc="") {
 
 action(Initiate_AtomicReturn_Forward, desc="") {
   if (is_AAN) {
-    // AAN: branch on hit, fill (BAT admits), or bypass (BAT rejects)
+    // AAN: branch on transparent bypass, hit, fill (BAT admits), or BAT reject.
     aanBAT.incReceived();
-    if (tbe.dataValid && tbe.dataUnique) {
+    if (aan_amo_policy == 0) {
+      DPRINTF(RubySlicc, "AAN Bypass: transparent policy addr=%#x\n", tbe.addr);
+      aanBAT.incBypass();
+      amoStats.incAANBypass();
+      tbe.actions.push(Event:SendAtomicReturn_AANTransparentBypass);
+    } else if (tbe.dataValid && tbe.dataUnique) {
       // AAN Hit: line is resident with unique ownership → execute atomic locally
       DPRINTF(RubySlicc, "AAN Hit: local AMO addr=%#x\n", tbe.addr);
       // Keep this request on BUSY_BLKD until NCBWrData executes the AMO.
@@ -1501,7 +1482,7 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       tbe.actions.push(Event:CheckCacheFill);
       tbe.actions.push(Event:WriteBEPipe);
       tbe.actions.push(Event:TagArrayWrite);
-    } else if (aanBAT.shouldAdmit(tbe.addr, aan_nofilter)) {
+    } else if (aanBAT.shouldAdmit(tbe.addr, aan_amo_policy == 1)) {
       // AAN Miss + BAT Admits: fetch ownership via ReadUnique, then execute locally
       DPRINTF(RubySlicc, "AAN Fill: BAT admitted addr=%#x\n", tbe.addr);
       aanBAT.incFill();
@@ -2297,15 +2278,31 @@ action(Send_WriteUnique, desc="") {
 
 action(Send_AtomicReturn, desc="") {
   assert(is_valid(tbe));
+  bool send_to_aan := !is_AAN && shouldRouteAddressToAAN(tbe.addr);
+  bool l2_forward := !is_HN && !is_AAN &&
+                     (tbe.reqType == CHIRequestType:AtomicReturn);
+  if (send_to_aan) {
+    if (tbe.early_ar_outgoing_profile_active) {
+      error("AAN early AtomicReturn outgoing profile was already active before sending request");
+    }
+    aanBAT.incDispatch();
+    if (l2_forward == false) {
+      tbe.early_ar_compdata_mode := true;
+      tbe.early_ar_compdata_received := false;
+      tbe.early_ar_dbid_received := false;
+      tbe.early_ar_ncb_sent := false;
+      tbe.early_ar_callback_done := false;
+      tbe.early_ar_outgoing_profile_active := true;
+    }
+  }
 
   enqueue(reqOutPort, CHIRequestMsg, request_latency) {
     prepareRequestAtomic(tbe, CHIRequestType:AtomicReturn, out_msg);
-    out_msg.Destination.add(mapAddressToDownstreamMachine(tbe.addr));
+    out_msg.Destination.add(mapAddressToAtomicReturnMachine(tbe.addr));
     allowRequestRetry(tbe, out_msg);
   }
   clearExpectedReqResp(tbe);
-  if (!is_HN && !is_AAN &&
-      (tbe.reqType == CHIRequestType:AtomicReturn)) {
+  if (l2_forward) {
     // L2 forward: HNF may respond with DBIDResp (non-migrate) or
     // CompData_UC/UD_PD (migrate). Register both.
     tbe.expected_req_resp.addExpectedRespType(CHIResponseType:DBIDResp);
@@ -2317,28 +2314,6 @@ action(Send_AtomicReturn, desc="") {
     tbe.expected_req_resp.addExpectedRespType(CHIResponseType:DBIDResp);
     tbe.expected_req_resp.addExpectedCount(1);
   }
-}
-
-action(Send_AtomicReturn_AAN, desc="") {
-  assert(is_valid(tbe));
-  if (tbe.early_ar_outgoing_profile_active) {
-    error("AAN early AtomicReturn outgoing profile was already active before sending request");
-  }
-  aanBAT.incDispatch();
-  tbe.early_ar_compdata_mode := true;
-  tbe.early_ar_compdata_received := false;
-  tbe.early_ar_dbid_received := false;
-  tbe.early_ar_ncb_sent := false;
-  tbe.early_ar_callback_done := false;
-  tbe.early_ar_outgoing_profile_active := true;
-  enqueue(reqOutPort, CHIRequestMsg, request_latency) {
-    prepareRequestAtomic(tbe, CHIRequestType:AtomicReturn, out_msg);
-    out_msg.Destination.add(mapAddressToAANMachine(tbe.addr));
-    allowRequestRetry(tbe, out_msg);
-  }
-  clearExpectedReqResp(tbe);
-  tbe.expected_req_resp.addExpectedRespType(CHIResponseType:DBIDResp);
-  tbe.expected_req_resp.addExpectedCount(1);
 }
 
 action(Send_AtomicReturn_AANTransparentBypass, desc="") {

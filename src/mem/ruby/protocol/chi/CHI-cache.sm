@@ -155,16 +155,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   // AAN admission table parameters (BAT)
   int aan_bat_entries := 128;
   int aan_bat_assoc := 2;
-  bool aan_enabled := "False";
   bool is_AAN := "False";
-  bool aan_nofilter := "False";
-  int aan_base_cache_id := 0;
-  int aan_num_nodes := 0;
-  int aan_rows := 4;
-  int aan_requester_chiplet_id := 0;
-  int aan_hnfs_per_chiplet := 16;
-  int aan_hnfs_per_row := 4;
-  int aan_hnf_select_bits := 5;
 
   // Delegato Predictor Table parameters (used when hnf_amo_policy == 5, at HN-F)
   int delegato_pt_entries := 128;
@@ -537,7 +528,6 @@ machine(MachineType:Cache, "Cache coherency protocol") :
 
     // Send an atomic request downstream.
     SendAtomicReturn,          out_trans="yes", desc="Send atomic request with return";
-    SendAtomicReturn_AAN,      out_trans="yes", desc="Send atomic request with return to AAN";
     SendAtomicReturn_AANTransparentBypass, out_trans="yes", desc="AAN transparent bypass atomic return to HNF";
     SendAtomicNoReturn,        out_trans="yes", desc="Send atomic request without return";
     SendARData,                desc="Send atomic return request data";

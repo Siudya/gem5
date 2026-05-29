@@ -132,12 +132,20 @@ def define_options(parser):
 
 
 def setup_memory_controllers(system, ruby, dir_cntrls, options):
-    snf_addr_map = getattr(options, "snf_addr_map", None)
+    custom_snf_ranges = None
+    if getattr(ruby, "enable_custom_route_table", False):
+        route_ranges = getattr(options, "_custom_route_ranges_by_version",
+                               None)
+        if route_ranges is None:
+            fatal(
+                "--enable-custom-route-table requires the caller to install "
+                "custom route helper callbacks"
+            )
+        custom_snf_ranges = route_ranges(
+            ruby, "SNF", "Memory", system.mem_ranges
+        )
 
-    if snf_addr_map and options.numa_high_bit:
-        fatal("Topology SNF addr_map cannot be combined with --numa-high-bit")
-
-    if options.numa_high_bit and not snf_addr_map:
+    if options.numa_high_bit:
         block_size_bits = (
             options.numa_high_bit + 1 - int(math.log(options.num_dirs, 2))
         )
@@ -154,10 +162,7 @@ def setup_memory_controllers(system, ruby, dir_cntrls, options):
     dir_bits = int(math.log(options.num_dirs, 2))
     xor_low_bit = options.xor_low_bit
 
-    if snf_addr_map:
-        intlv_size = 2 ** (snf_addr_map["intlv_low_bit"])
-        xor_low_bit = snf_addr_map["xor_low_bit"]
-    elif options.numa_high_bit:
+    if options.numa_high_bit:
         dir_bits = int(math.log(options.num_dirs, 2))
         intlv_size = 2 ** (options.numa_high_bit - dir_bits + 1)
     else:
@@ -177,16 +182,38 @@ def setup_memory_controllers(system, ruby, dir_cntrls, options):
             dir_cntrl.memory_out_port = crossbar.cpu_side_ports
 
         dir_ranges = []
-        for r in system.mem_ranges:
+        if custom_snf_ranges is None:
+            dir_system_ranges = system.mem_ranges
+        else:
+            dir_system_ranges = custom_snf_ranges.get(int(dir_cntrl.version))
+            if not dir_system_ranges:
+                fatal(
+                    "custom route table has no SNF ranges for Memory "
+                    "controller version %d",
+                    int(dir_cntrl.version),
+                )
+
+        for r in dir_system_ranges:
             mem_type = ObjectList.mem_list.get(options.mem_type)
-            dram_intf = MemConfig.create_mem_intf(
-                mem_type,
-                r,
-                index,
-                dir_bits,
-                intlv_size,
-                xor_low_bit,
-            )
+            if custom_snf_ranges is None:
+                dram_intf = MemConfig.create_mem_intf(
+                    mem_type,
+                    r,
+                    index,
+                    dir_bits,
+                    intlv_size,
+                    xor_low_bit,
+                )
+            else:
+                dram_intf = MemConfig.create_mem_intf(
+                    mem_type,
+                    r,
+                    0,
+                    0,
+                    system.cache_line_size.value,
+                    0,
+                )
+                dram_intf.range = r
             if issubclass(mem_type, DRAMInterface):
                 mem_ctrl = m5.objects.MemCtrl(dram=dram_intf)
             else:

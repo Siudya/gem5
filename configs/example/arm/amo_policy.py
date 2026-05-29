@@ -61,14 +61,6 @@ class AMOPolicy:
         return HNF_POLICY_CODES[self.hnf_policy]
 
     @property
-    def aan_enabled(self):
-        return self.aan_policy != "bypass"
-
-    @property
-    def aan_nofilter(self):
-        return self.aan_policy == "near"
-
-    @property
     def delegato_rt_enabled(self):
         return self.hnf_policy == "delegato"
 

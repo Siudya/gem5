@@ -53,6 +53,8 @@ void set_tbe(TBE b);
 void unset_tbe();
 MachineID mapAddressToDownstreamMachine(Addr addr);
 MachineID mapAddressToMachine(Addr addr, MachineType mtype);
+MachineID mapAddressToAtomicReturnMachine(Addr addr);
+bool shouldRouteAddressToAAN(Addr addr);
 
 void incomingTransactionStart(Addr, Event, State, bool);
 void incomingTransactionEnd(Addr, State);
@@ -67,46 +69,6 @@ void outgoingTransactionStart(Addr, Event, bool);
 void outgoingTransactionEnd(Addr, bool, bool);
 Event curTransitionEvent();
 State curTransitionNextState();
-
-int getAANHomeHNFIndex(Addr addr) {
-  int selector_high_bit := cache_block_size_bits + aan_hnf_select_bits - 1;
-  return addressToInt(bitSelect(addr, cache_block_size_bits,
-                                selector_high_bit));
-}
-
-int getAANHomeRow(Addr addr) {
-  int hnf_within_chiplet := mod(getAANHomeHNFIndex(addr),
-                                aan_hnfs_per_chiplet);
-  return hnf_within_chiplet / aan_hnfs_per_row;
-}
-
-int getAANHomeChiplet(Addr addr) {
-  return getAANHomeHNFIndex(addr) / aan_hnfs_per_chiplet;
-}
-
-bool shouldSendAtomicReturnToAAN(Addr addr) {
-  if (aan_enabled == false) {
-    return false;
-  }
-  assert(aan_num_nodes > 0);
-
-  if (getAANHomeChiplet(addr) == aan_requester_chiplet_id) {
-    return false;
-  }
-
-  int aan_index := aan_requester_chiplet_id * aan_rows +
-                   getAANHomeRow(addr);
-  assert(aan_index < aan_num_nodes);
-  return true;
-}
-
-MachineID mapAddressToAANMachine(Addr addr) {
-  int aan_index := aan_requester_chiplet_id * aan_rows +
-                   getAANHomeRow(addr);
-  assert(aan_index < aan_num_nodes);
-  return createMachineID(MachineType:Cache,
-                         intToID(aan_base_cache_id + aan_index));
-}
 
 int computeHnfAMODirCase(TBE tbe) {
   if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {

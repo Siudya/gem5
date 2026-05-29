@@ -196,7 +196,7 @@ class AbstractController : public ClockedObject, public Consumer
     statistics::Histogram& getDelayVCHist(uint32_t index)
     { return *(stats.delayVCHistogram[index]); }
 
-    bool respondsTo(Addr addr)
+    bool respondsTo(Addr addr) const
     {
         for (auto &range: addrRanges)
             if (range.contains(addr)) return true;
@@ -231,6 +231,14 @@ class AbstractController : public ClockedObject, public Consumer
      */
     MachineID mapAddressToDownstreamMachine(Addr addr,
                                     MachineType mtype = MachineType_NUM) const;
+    MachineID mapAddressToAtomicReturnMachine(Addr addr) const;
+    bool shouldRouteAddressToAAN(Addr addr) const;
+
+  private:
+    MachineID mapAddressToConfiguredDownstreamMachine(
+        Addr addr, MachineType mtype) const;
+
+  public:
 
     /** List of downstream destinations (towards memory) */
     const NetDest& allDownstreamDest() const { return downstreamDestinations; }

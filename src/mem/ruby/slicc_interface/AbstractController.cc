@@ -425,14 +425,24 @@ AbstractController::recvAtomic(PacketPtr pkt)
 MachineID
 AbstractController::mapAddressToMachine(Addr addr, MachineType mtype) const
 {
+    if (m_ruby_system->getCustomRouteTableEnabled()) {
+        if (mtype == MachineType_MiscNode) {
+            return m_ruby_system->routeAddressToMachine("MN", addr);
+        } else if (mtype == MachineType_Memory) {
+            return m_ruby_system->routeAddressToMachine("SNF", addr);
+        } else if (mtype == MachineType_Cache) {
+            return m_ruby_system->routeAddressToMachine("HNF", addr);
+        }
+    }
+
     NodeID node = m_net_ptr->addressToNodeID(addr, mtype);
     MachineID mach = {mtype, node};
     return mach;
 }
 
 MachineID
-AbstractController::mapAddressToDownstreamMachine(Addr addr, MachineType mtype)
-const
+AbstractController::mapAddressToConfiguredDownstreamMachine(
+    Addr addr, MachineType mtype) const
 {
     if (mtype == MachineType_NUM) {
         // map to the first match
@@ -441,8 +451,7 @@ const
             if (mapping != i.second.end())
                 return mapping->second;
         }
-    }
-    else {
+    } else {
         const auto i = downstreamAddrMap.find(mtype);
         if (i != downstreamAddrMap.end()) {
             const auto mapping = i->second.contains(addr);
@@ -452,6 +461,73 @@ const
     }
     fatal("%s: couldn't find mapping for address %x mtype=%s\n",
         name(), addr, mtype);
+}
+
+MachineID
+AbstractController::mapAddressToDownstreamMachine(Addr addr, MachineType mtype)
+const
+{
+    if (m_ruby_system->getCustomRouteTableEnabled()) {
+        const MachineID configured =
+            mapAddressToConfiguredDownstreamMachine(addr, mtype);
+        const std::string &src_role =
+            m_ruby_system->routeMachineRole(m_machineID);
+        const std::string &dst_role =
+            m_ruby_system->routeMachineRole(configured);
+
+        if (dst_role == "SNF") {
+            fatal_if(src_role != "HNF",
+                     "%s: only HNF may route downstream to SNF "
+                     "(src=%s addr=%#llx)\n",
+                     name(), src_role, addr);
+            return m_ruby_system->routeAddressToMachine("SNF", addr);
+        }
+
+        if (dst_role == "HNF") {
+            fatal_if(src_role != "RNF" && src_role != "L2" &&
+                     src_role != "AAN" && src_role != "RNI",
+                     "%s: only RNF/L2/AAN/RNI may route downstream to HNF "
+                     "(src=%s addr=%#llx)\n",
+                     name(), src_role, addr);
+            return m_ruby_system->routeAddressToMachine("HNF", addr);
+        }
+
+        if (dst_role == "AAN") {
+            fatal_if(src_role != "RNF" && src_role != "L2",
+                     "%s: only RNF/L2 may route downstream to AAN "
+                     "(src=%s addr=%#llx)\n",
+                     name(), src_role, addr);
+            return m_ruby_system->routeAddressToMachine("AAN", addr);
+        }
+
+        if (dst_role == "MN") {
+            fatal_if(src_role != "RNF" && src_role != "L2" &&
+                     src_role != "RNI",
+                     "%s: only RNF/L2/RNI may route downstream to MN "
+                     "(src=%s addr=%#llx)\n",
+                     name(), src_role, addr);
+            return m_ruby_system->routeAddressToMachine("MN", addr);
+        }
+
+        return configured;
+    }
+
+    return mapAddressToConfiguredDownstreamMachine(addr, mtype);
+}
+
+bool
+AbstractController::shouldRouteAddressToAAN(Addr addr) const
+{
+    return m_ruby_system->shouldRouteAddressToAAN(addr, m_machineID);
+}
+
+MachineID
+AbstractController::mapAddressToAtomicReturnMachine(Addr addr) const
+{
+    if (shouldRouteAddressToAAN(addr)) {
+        return m_ruby_system->routeAddressToMachine("AAN", addr);
+    }
+    return mapAddressToDownstreamMachine(addr);
 }
 
 

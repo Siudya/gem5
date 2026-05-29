@@ -60,6 +60,20 @@ class RubySystem(ClockedObject):
         False,
         "Skip Ruby cache-trace warmup during checkpoint restore",
     )
+    enable_custom_route_table = Param.Bool(
+        False,
+        "Use the global Ruby custom route table for CHI address routing",
+    )
+    route_table_entries = VectorParam.String(
+        [],
+        "Global Ruby route table entries as "
+        "'table min max mask compare destination-node-id'",
+    )
+    route_node_entries = VectorParam.String(
+        [],
+        "Global Ruby route node entries as "
+        "'node-id machine-type machine-version role chiplet-id'",
+    )
 
     # Profiler related configuration variables
     hot_lines = Param.Bool(False, "")

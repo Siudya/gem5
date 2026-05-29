@@ -46,6 +46,82 @@ Cross-chiplet D2D links: (5↔6), (17↔18), (29↔30), (41↔42)
 from ruby import CHI_config
 
 
+MAIN_MEM_MIN = 0x0
+MAIN_MEM_MAX = 0x280000000
+BOOT_MEM_MIN = 0x0
+BOOT_MEM_MAX = 0x4000000
+MN_MIN = 0x0
+MN_MAX = 0x400
+
+NODE_ID_BASE = {
+    "RNF": 0,
+    "L2": 64,
+    "HNF": 96,
+    "AAN": 128,
+    "SNF": 136,
+    "BOOT_SNF": 144,
+    "MN": 145,
+    "RNI": 146,
+}
+
+OPTIONAL_ROUTE_NODE_IDS = (NODE_ID_BASE["BOOT_SNF"],)
+
+route_table = [
+    ("MN", MN_MIN, MN_MAX, 0x0, 0x0, 145),
+    ("SNF", BOOT_MEM_MIN, BOOT_MEM_MAX, 0x0, 0x0, 144),
+
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x0, 96),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x40, 97),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x80, 98),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0xc0, 99),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x100, 100),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x140, 101),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x180, 102),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x1c0, 103),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x200, 104),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x240, 105),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x280, 106),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x2c0, 107),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x300, 108),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x340, 109),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x380, 110),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x3c0, 111),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x400, 112),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x440, 113),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x480, 114),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x4c0, 115),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x500, 116),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x540, 117),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x580, 118),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x5c0, 119),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x600, 120),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x640, 121),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x680, 122),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x6c0, 123),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x700, 124),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x740, 125),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x780, 126),
+    ("HNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x7c0, 0x7c0, 127),
+
+    ("SNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x700, 0x0, 136),
+    ("SNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x700, 0x100, 137),
+    ("SNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x700, 0x200, 138),
+    ("SNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x700, 0x300, 139),
+    ("SNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x700, 0x400, 140),
+    ("SNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x700, 0x500, 141),
+    ("SNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x700, 0x600, 142),
+    ("SNF", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x700, 0x700, 143),
+
+    ("AAN", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x4c0, 0x0, 132),
+    ("AAN", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x4c0, 0x40, 133),
+    ("AAN", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x4c0, 0x80, 134),
+    ("AAN", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x4c0, 0xc0, 135),
+    ("AAN", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x4c0, 0x400, 128),
+    ("AAN", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x4c0, 0x440, 129),
+    ("AAN", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x4c0, 0x480, 130),
+    ("AAN", MAIN_MEM_MIN, MAIN_MEM_MAX, 0x4c0, 0x4c0, 131),
+]
+
 class NoC_Params(CHI_config.NoC_Params):
     num_rows = 4
     num_cols = 12
@@ -96,8 +172,6 @@ class CHI_HNF(CHI_config.CHI_HNF):
     """LLC/directory slices distributed across col 1-4 and col 7-10 routers."""
     class NoC_Params(CHI_config.CHI_HNF.NoC_Params):
         router_list = _core_routers
-        # 32 HNFs: keep cacheline-granularity striping (64B -> PA[10:6]).
-        addr_map = CHI_config.AddrMap(intlv_low_bit=6, xor_low_bit=0)
 
 
 class CHI_AAN(CHI_config.CHI_AAN):
@@ -116,9 +190,6 @@ class CHI_SNF_MainMem(CHI_config.CHI_SNF_MainMem):
     """8 DDR5 channels: 4 on col 0 (Chiplet 0), 4 on col 11 (Chiplet 1)."""
     class NoC_Params(CHI_config.CHI_SNF_MainMem.NoC_Params):
         router_list = _mem_routers
-        # 8 SNFs: 256B striping with no XOR hash (PA[10:8]) aligns SNF selector
-        # with the 32-HNF chip bit (PA[10]), keeping HNF requests on local SNFs.
-        addr_map = CHI_config.AddrMap(intlv_low_bit=8, xor_low_bit=0)
 
 
 class CHI_SNF_BootMem(CHI_config.CHI_SNF_BootMem):
