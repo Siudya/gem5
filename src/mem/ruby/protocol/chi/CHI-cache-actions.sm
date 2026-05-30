@@ -1566,28 +1566,28 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       // dataUnique but none of the above matched — illegal state
       error("AtomicReturn_Forward: unexpected Unique state");
     } else {
-      // Forward to HNF with deferred branching.
-      // Action queue built dynamically by response handlers:
-      //   DBIDResp → non-migrate (pass-through)
-      //   CompData_UC/UD → migrate (execute locally)
-      tbe.actions.push(Event:SendAtomicReturn);
+      // Far: flag-driven out-of-order forward to HNF/AAN.
+      // Central (downstream DBIDResp + CompData_I): HN executes the atomic.
+      // Migrate (downstream CompData_UC/UD_PD): this L2 executes locally.
+      // Send order is decided edge-by-edge in Callback_AtomicReturn_Forward;
+      // expected_req_resp is held at a sentinel until all flags complete.
+      assert(is_L2);
+      tbe.ar_fwd := true;
       tbe.dataToBeInvalid := true;
       tbe.doCacheFill := false;
+      clearExpectedReqResp(tbe);
+      tbe.expected_req_resp.setExpectedCount(999);
+      Callback_AtomicReturn_Forward(tbe);
     }
   }
 }
 
 action(Branch_AtomicReturn_Forward, desc="") {
-  // L2 deferred branching: DBIDResp arrived → non-migrate path.
-  if (!is_HN && !is_AAN &&
-      (tbe.reqType == CHIRequestType:AtomicReturn) &&
-      !tbe.is_delegato_migrate) {
-    tbe.expected_req_resp.setExpectedCount(tbe.expected_req_resp.received());
-    tbe.actions.push(Event:WriteFEPipe);
-    tbe.actions.push(Event:SendDBIDResp_AR);
-    tbe.actions.push(Event:SendARData);
-    tbe.actions.push(Event:SendCompData_AR);
-    tbe.actions.push(Event:WriteBEPipe);
+  // Flag-driven far AtomicReturn at L2: downstream DBIDResp arrived (central).
+  // Mark the downstream DBID edge and advance the callback.
+  if (tbe.ar_fwd) {
+    tbe.ar_ds_dbid := true;
+    Callback_AtomicReturn_Forward(tbe);
   }
 }
 
@@ -2279,21 +2279,8 @@ action(Send_WriteUnique, desc="") {
 action(Send_AtomicReturn, desc="") {
   assert(is_valid(tbe));
   bool send_to_aan := !is_AAN && shouldRouteAddressToAAN(tbe.addr);
-  bool l2_forward := !is_HN && !is_AAN &&
-                     (tbe.reqType == CHIRequestType:AtomicReturn);
   if (send_to_aan) {
-    if (tbe.early_ar_outgoing_profile_active) {
-      error("AAN early AtomicReturn outgoing profile was already active before sending request");
-    }
     aanBAT.incDispatch();
-    if (l2_forward == false) {
-      tbe.early_ar_compdata_mode := true;
-      tbe.early_ar_compdata_received := false;
-      tbe.early_ar_dbid_received := false;
-      tbe.early_ar_ncb_sent := false;
-      tbe.early_ar_callback_done := false;
-      tbe.early_ar_outgoing_profile_active := true;
-    }
   }
 
   enqueue(reqOutPort, CHIRequestMsg, request_latency) {
@@ -2301,16 +2288,13 @@ action(Send_AtomicReturn, desc="") {
     out_msg.Destination.add(mapAddressToAtomicReturnMachine(tbe.addr));
     allowRequestRetry(tbe, out_msg);
   }
-  clearExpectedReqResp(tbe);
-  if (l2_forward) {
-    // L2 forward: HNF may respond with DBIDResp (non-migrate) or
-    // CompData_UC/UD_PD (migrate). Register both.
-    tbe.expected_req_resp.addExpectedRespType(CHIResponseType:DBIDResp);
-    tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UC);
-    tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UD_PD);
-    tbe.expected_req_resp.addExpectedRespType(CHIResponseType:RespSepData);
-    tbe.expected_req_resp.setExpectedCount(2);
-  } else {
+  // Flag-driven far AtomicReturn (L2, ar_fwd) keeps the ExpectedMap at the
+  // sentinel set in Initiate_AtomicReturn_Forward and tracks downstream
+  // responses via the ar_* flags, so it must not clear/re-arm here.
+  if (tbe.ar_fwd == false) {
+    // L1D-originated AtomicReturn (TBE reqType is AtomicLoad): expect the
+    // completer's DBIDResp, then send the operand via SendARData.
+    clearExpectedReqResp(tbe);
     tbe.expected_req_resp.addExpectedRespType(CHIResponseType:DBIDResp);
     tbe.expected_req_resp.addExpectedCount(1);
   }
@@ -2660,29 +2644,49 @@ action(WriteZero, desc="") {
 
 action(Receive_ReqDataResp, desc="") {
   assert(is_valid(tbe));
-  bool early_ar_data := false;
-  peek(datInPort, CHIDataMsg) {
-    early_ar_data := tbe.early_ar_compdata_mode &&
-                     (in_msg.type == CHIDataType:CompData_I);
-  }
-
-  if (early_ar_data) {
+  if (tbe.ar_fwd) {
+    // Flag-driven far AtomicReturn (L2 forward). Two data streams share this
+    // action but never the byte-mask: upstream NCBWrData payload is discarded
+    // (operand rode in atomic_op), so only downstream CompData writes
+    // dataBlkValid, which therefore tracks the CompData stream alone.
     peek(datInPort, CHIDataMsg) {
-      if (tbe.dataBlkValid.isFull()) {
-        tbe.dataBlkValid.clear();
+      if (in_msg.type == CHIDataType:NCBWrData) {
+        // Upstream operand beat: payload unused, just record the edge.
+        tbe.ar_us_wdat := true;
+        Callback_AtomicReturn_Forward(tbe);
+      } else {
+        // Downstream CompData beat (CompData_I central, CompData_UC/UD_PD
+        // migrate). Accumulate old value, act once the line is complete.
+        if (tbe.dataBlkValid.isFull()) {
+          tbe.dataBlkValid.clear();
+        }
+        tbe.oldDataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+        tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+        assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
+        tbe.dataBlkValid.orMask(in_msg.bitMask);
+        if (tbe.dataBlkValid.isFull()) {
+          tbe.dataValid := true;
+          tbe.ar_ds_rdat := true;
+          if (in_msg.type == CHIDataType:CompData_I) {
+            // Central: HN executed the atomic; we only relay the old value.
+            tbe.dataToBeInvalid := true;
+            tbe.doCacheFill := false;
+            tbe.ar_ds_ack := true;   // no CompAck on central path
+            tbe.ar_loc_amo := true;  // remote execution
+          } else {
+            // Migrate (CompData_UC/UD_PD): ownership moved here; execute and
+            // write back locally. No downstream DBID/NCBWrData handshake.
+            tbe.dataUnique := true;
+            tbe.dataDirty := (in_msg.type == CHIDataType:CompData_UD_PD);
+            tbe.dataToBeInvalid := false;
+            tbe.doCacheFill := true;
+            tbe.is_delegato_migrate := true;
+            tbe.ar_ds_dbid := true;
+            tbe.ar_ds_wdat := true;
+          }
+          Callback_AtomicReturn_Forward(tbe);
+        }
       }
-      tbe.oldDataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
-      assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
-      tbe.dataBlkValid.orMask(in_msg.bitMask);
-      if (tbe.dataBlkValid.isFull()) {
-        tbe.dataValid := true;
-        tbe.dataAMOValid := true;
-        tbe.dataToBeInvalid := true;
-        tbe.early_ar_compdata_received := true;
-      }
-      DPRINTF(RubySlicc, "AAN early AtomicReturn CompData received %s\n",
-              tbe.oldDataBlk);
-      DPRINTF(RubySlicc, "dataBlkValid = %s\n", tbe.dataBlkValid);
     }
   } else {
     assert(tbe.expected_req_resp.hasExpected());
@@ -2729,15 +2733,11 @@ action(Receive_ReqDataResp, desc="") {
 
 action(Receive_RespSepDataFromCompData, desc="") {
   assert(is_valid(tbe));
-  assert(tbe.expected_req_resp.hasExpected() || tbe.early_ar_compdata_mode);
+  // Flag-driven far AtomicReturn (L2 forward) tracks data via ar_* flags in
+  // Receive_ReqDataResp, not through the ExpectedMap RespSepData accounting.
+  if (tbe.ar_fwd == false) {
+    assert(tbe.expected_req_resp.hasExpected());
 
-  bool early_ar_data := false;
-  peek(datInPort, CHIDataMsg) {
-    early_ar_data := tbe.early_ar_compdata_mode &&
-                     (in_msg.type == CHIDataType:CompData_I);
-  }
-
-  if (early_ar_data == false) {
     // check if a previous CompData msg already counted as a RespSepData
     if (tbe.expected_req_resp.receivedRespType(CHIResponseType:RespSepData) == false) {
       if (tbe.expected_req_resp.receiveResp(CHIResponseType:RespSepData) == false) {
@@ -3224,13 +3224,17 @@ action(UpdateDirState_FromSnpResp, desc="") {
 }
 
 action(Receive_ReqResp, desc="") {
-  assert(tbe.expected_req_resp.hasExpected());
-  peek(rspInPort, CHIResponseMsg) {
-    // Decrement pending
-    if (tbe.expected_req_resp.receiveResp(in_msg.type) == false) {
-      error("Received unexpected message");
+  // Flag-driven far AtomicReturn (L2 forward) does not track responses through
+  // the ExpectedMap; its DBIDResp edge is handled in Branch_AtomicReturn_Forward.
+  if (tbe.ar_fwd == false) {
+    assert(tbe.expected_req_resp.hasExpected());
+    peek(rspInPort, CHIResponseMsg) {
+      // Decrement pending
+      if (tbe.expected_req_resp.receiveResp(in_msg.type) == false) {
+        error("Received unexpected message");
+      }
+      assert(in_msg.stale == tbe.is_stale);
     }
-    assert(in_msg.stale == tbe.is_stale);
   }
 }
 
@@ -3247,17 +3251,16 @@ action(Receive_ReqResp_WUComp, desc="") {
 }
 
 action(Receive_ReqResp_CopyDBID, desc="Copy the rsp DBID into the TBE") {
-  if (tbe.expected_req_resp.receivedRespType(CHIResponseType:DBIDResp) == false &&
-      tbe.expected_req_resp.receivedRespType(CHIResponseType:CompDBIDResp) == false) {
-    error("Received unexpected message");
+  if (tbe.ar_fwd == false) {
+    if (tbe.expected_req_resp.receivedRespType(CHIResponseType:DBIDResp) == false &&
+        tbe.expected_req_resp.receivedRespType(CHIResponseType:CompDBIDResp) == false) {
+      error("Received unexpected message");
+    }
   }
   peek(rspInPort, CHIResponseMsg) {
     tbe.txnId := in_msg.dbid;
     tbe.pendReqDest.clear();
     tbe.pendReqDest.add(in_msg.responder);
-  }
-  if (tbe.early_ar_compdata_mode) {
-    tbe.early_ar_dbid_received := true;
   }
 }
 
@@ -3481,8 +3484,6 @@ action(CheckARComp, desc="") {
   assert(is_valid(tbe));
   clearExpectedReqResp(tbe);
   if (tbe.is_delegato_migrate) {
-    tbe.expected_req_resp.setExpectedCount(0);
-  } else if (tbe.early_ar_compdata_mode) {
     tbe.expected_req_resp.setExpectedCount(0);
   } else {
     tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_I);
@@ -3732,11 +3733,6 @@ action(Send_Data, desc="") {
 
   // send next chunk (if any) next cycle
   scheduleSendData(tbe, 1);
-  if (tbe.early_ar_compdata_mode &&
-      (tbe.snd_msgType == CHIDataType:NCBWrData) &&
-      (tbe.snd_pendBytes.count() == 0)) {
-    tbe.early_ar_ncb_sent := true;
-  }
 }
 
 action(Send_RespSepData, desc="") {
@@ -4122,9 +4118,6 @@ action(CheckCacheFill, desc="") {
 action(Finalize_DeallocateRequest, desc="") {
   assert(is_valid(tbe));
   assert(tbe.actions.empty());
-  if (tbe.early_ar_outgoing_profile_active) {
-    error("AAN early AtomicReturn deallocated before outgoing profile completed");
-  }
   wakeupPendingReqs(tbe);
   wakeupPendingSnps(tbe);
   wakeupPendingTgrs(tbe);
@@ -4306,29 +4299,6 @@ action(Callback_ExpressPrefetchHit, desc="") {
   }
 }
 
-action(Callback_EarlyAtomicReturn, desc="") {
-  assert(is_valid(tbe));
-  if (tbe.early_ar_compdata_mode &&
-      tbe.early_ar_compdata_received &&
-      tbe.early_ar_dbid_received &&
-      tbe.early_ar_ncb_sent) {
-    if (tbe.early_ar_callback_done) {
-      error("AAN early AtomicReturn completion was triggered more than once");
-    }
-    if (tbe.early_ar_outgoing_profile_active == false) {
-      error("AAN early AtomicReturn completed without an active outgoing profile");
-    }
-    assert(tbe.dataBlkValid.isFull());
-    assert(tbe.dataAMOValid);
-    DPRINTF(RubySlicc, "AAN early AtomicReturn callback old=%s\n",
-            tbe.oldDataBlk);
-    sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
-    tbe.early_ar_callback_done := true;
-    outgoingTransactionEnd(address, tbe.rcvdRetryAck);
-    tbe.early_ar_outgoing_profile_active := false;
-  }
-}
-
 // This is called everytime a data message is received but only goes
 // though once all the blocks are present (tbe.dataValid)
 // NOTE: should create a separate trigger for this callback ?
@@ -4384,17 +4354,17 @@ action(Callback_Miss, desc="") {
       amoStats.incNearL1AMO();
     }
   } else if (tbe.dataValid && tbe.dataAMOValid &&
-             (tbe.reqType == CHIRequestType:AtomicLoad) &&
-             (tbe.early_ar_compdata_mode == false)) {
+             (tbe.reqType == CHIRequestType:AtomicLoad)) {
     DPRINTF(RubySlicc, "Atomic before %s\n", tbe.oldDataBlk);
     sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
 
   // Delegato Migrate at L2: CompData_UD_PD arrived for AtomicReturn.
   // Data is in tbe.dataBlk (UD), AMO not yet executed. Execute locally.
   // Send_Data will use tbe.oldDataBlk for the response to L1D.
+  // (ar_fwd L2 forward handles migrate inline in Receive_ReqDataResp.)
   } else if (!is_HN && tbe.dataValid && tbe.dataUnique &&
              (tbe.reqType == CHIRequestType:AtomicReturn) &&
-             !tbe.dataAMOValid) {
+             !tbe.dataAMOValid && !tbe.ar_fwd) {
     if (tbe.is_aan_hit) {
       // AAN fill: CompData has arrived, but the AMO operand may still be
       // pending in NCBWrData. Keep the line resident for local execution.
@@ -4566,10 +4536,11 @@ action(Profile_OutgoingStart, desc="") {
 action(Profile_OutgoingEnd_DataResp, desc="") {
   assert(is_valid(tbe));
   // completes once all data is received
-  if (tbe.early_ar_outgoing_profile_active) {
-    if (tbe.expected_req_resp.hasReceivedData()) {
+  if (tbe.ar_fwd) {
+    // flag-driven far AtomicReturn: the downstream request (SendAtomicReturn)
+    // opened the outgoing transaction; end it once its CompData line is in.
+    if (tbe.ar_ds_rdat) {
       outgoingTransactionEnd(address, tbe.rcvdRetryAck);
-      tbe.early_ar_outgoing_profile_active := false;
     }
   } else if (tbe.expected_req_resp.hasReceivedData()) {
     outgoingTransactionEnd(address, tbe.rcvdRetryAck);

@@ -1445,6 +1445,23 @@ transition({BUSY_BLKD,BUSY_INTR}, SendDBIDResp_AR) {
   ProcessNextState_ClearPending;
 }
 
+// Flag-driven far AtomicReturn (L2): ack upstream L1D. No ExpectNCBWrData_A
+// (the operand NCBWrData edge is tracked by the ar_us_wdat flag, and the
+// ExpectedMap stays at the sentinel until all flags complete).
+transition({BUSY_BLKD,BUSY_INTR}, SendDBIDResp_AR_Fwd) {
+  Pop_TriggerQueue;
+  Send_DBIDResp;
+  ProcessNextState_ClearPending;
+}
+
+// Flag-driven far AtomicReturn (L2): send the operand NCBWrData downstream.
+// No CheckARComp (no ExpectedMap re-arming; completion is flag-driven).
+transition({BUSY_BLKD,BUSY_INTR}, SendARData_Fwd) {
+  Pop_TriggerQueue;
+  Send_ARData;
+  ProcessNextState_ClearPending;
+}
+
 transition({BUSY_BLKD,BUSY_INTR}, SendCompData_AR) {
   Pop_TriggerQueue;
   Send_CompData_AR;
@@ -1558,7 +1575,6 @@ transition({BUSY_BLKD,BUSY_INTR},
   Receive_ReqDataResp;
   UpdateDataState_FromReqDataResp;
   Callback_Miss;
-  Callback_EarlyAtomicReturn;
   Profile_OutgoingEnd_DataResp;
   Pop_DataInQueue;
   ProcessNextState;
@@ -1695,7 +1711,6 @@ transition({BUSY_INTR,BUSY_BLKD}, DBIDResp, BUSY_BLKD) {
   Receive_ReqResp_CopyDBID;
   Branch_AtomicReturn_Forward;
   Receive_ReqResp_WUNeedComp;
-  Callback_EarlyAtomicReturn;
   Pop_RespInQueue;
   ProcessNextState;
 }
@@ -1709,7 +1724,6 @@ transition(BUSY_BLKD, Comp) {
 transition({BUSY_BLKD,BUSY_INTR}, TX_Data) {
   Pop_TriggerQueue;
   Send_Data;
-  Callback_EarlyAtomicReturn;
   ProcessNextState_ClearPending;
 }
 

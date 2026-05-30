@@ -470,12 +470,6 @@ void processNextState(Addr address, TBE tbe, CacheEntry cache_entry) {
   int expected_msgs := tbe.expected_req_resp.expected() +
                         tbe.expected_snp_resp.expected() +
                         tbe.snd_pendBytes.count();
-  if (tbe.early_ar_compdata_mode &&
-      (tbe.early_ar_compdata_received == false) &&
-      (tbe.actions.empty() ||
-       (tbe.actions.front() == Event:SendCompData_AR))) {
-    expected_msgs := expected_msgs + 1;
-  }
   if ((tbe.pendAction == Event:null) && ((expected_msgs == 0) || has_nb_trigger)) {
     Cycles trigger_latency := intToCycles(0);
     if (tbe.delayNextAction > curTick()) {

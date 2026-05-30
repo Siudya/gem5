@@ -368,6 +368,7 @@ class CHI_L2Controller(Base_CHI_Cache_Controller):
         self.use_prefetcher = prefetcher != NULL
         self.allow_SD = True
         self.is_HN = False
+        self.is_L2 = True
         self.enable_DMT = False
         self.enable_DCT = False
         self.send_evictions = False

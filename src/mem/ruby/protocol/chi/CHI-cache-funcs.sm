@@ -413,6 +413,85 @@ void clearExpectedReqResp(TBE tbe) {
   tbe.expected_req_resp.clear(blockSize / data_channel_size);
 }
 
+// Flag-driven far AtomicReturn forwarding at the L2 (is_L2). Called from every
+// input edge after that edge sets its flag. Each guarded clause fires its
+// outgoing action exactly once (its done-flag gates re-entry). The flags
+// encode two half-transactions: upstream (toward L1D) and downstream (toward
+// HNF/SNF). central path = downstream returns DBIDResp then CompData_I (HN
+// executes the atomic); migrate path = downstream returns CompData_UC/UD_PD
+// (this L2 executes the atomic locally and writes back).
+// expected_req_resp is held at a large sentinel for the whole sequence and
+// released (received := sentinel via setExpectedCount(received)) only when all
+// flags are set, so processNextState cannot finalize the TBE early.
+//
+// INVARIANT: the completion gate MUST be the last clause in this function.
+// There is no event after the local atomic completes, so the gate is only ever
+// re-evaluated when an input edge arrives. The last-arriving edge can set
+// several flags in a single call (e.g. migrate CompData sets ar_ds_rdat ->
+// ar_us_rdat -> ar_ds_ack -> ar_loc_amo all at once); the gate must run AFTER
+// those flag-setting clauses in the same call, or it would miss the moment all
+// flags become true and the TBE would hang forever.
+void Callback_AtomicReturn_Forward(TBE tbe) {
+  assert(is_valid(tbe));
+  assert(tbe.ar_fwd);
+
+  // Downstream: forward the AtomicReturn request (carries atomic_op).
+  if (tbe.ar_ds_req == false) {
+    tbe.actions.pushNB(Event:SendAtomicReturn);
+    tbe.ar_ds_req := true;
+  }
+  // Upstream: ack the L1D with a DBIDResp so it sends us the operand NCBWrData.
+  // Deferred until the downstream DBID is in (ar_ds_dbid): sending it earlier
+  // pushes the L1D from BUSY_INTR to BUSY_BLKD, where it would stall the HN's
+  // invalidation snoop on this line and deadlock. Holding it keeps the L1D
+  // snoopable through the invalidation window (matches the legacy ordering
+  // where the upstream DBIDResp follows the downstream DBIDResp).
+  if ((tbe.ar_us_dbid == false) && tbe.ar_ds_dbid) {
+    tbe.actions.pushNB(Event:SendDBIDResp_AR_Fwd);
+    tbe.ar_us_dbid := true;
+  }
+  // Downstream: once the HNF granted a DBID and the upstream operand arrived,
+  // send the (placeholder) NCBWrData to close the write-data handshake.
+  // Skipped on the migrate path (ar_ds_wdat preset true on CompData_UC/UD_PD).
+  if ((tbe.ar_ds_wdat == false) && tbe.ar_ds_dbid && tbe.ar_us_wdat) {
+    tbe.actions.pushNB(Event:SendARData_Fwd);
+    tbe.ar_ds_wdat := true;
+  }
+  // Upstream: once the downstream data (old value) arrived, return CompData_I.
+  if ((tbe.ar_us_rdat == false) && tbe.ar_ds_rdat) {
+    tbe.actions.pushNB(Event:SendCompData_AR);
+    tbe.ar_us_rdat := true;
+  }
+  // Downstream: on the migrate path, ack the HNF with CompAck.
+  // Preset true on the central path (CompData_I), so this is migrate-only.
+  if ((tbe.ar_ds_ack == false) && tbe.ar_ds_rdat) {
+    tbe.actions.pushNB(Event:SendCompAck);
+    tbe.ar_ds_ack := true;
+  }
+  // Migrate local execution: data migrated here, execute the atomic and write
+  // back. Preset true on the central path (remote execution), so migrate-only.
+  // Requires the old value already returned upstream (ar_us_rdat) and CompAck
+  // sent (ar_ds_ack) so ordering toward both neighbors is settled first.
+  if ((tbe.ar_loc_amo == false) && tbe.ar_us_rdat && tbe.ar_ds_rdat &&
+      tbe.ar_ds_ack) {
+    tbe.actions.push(Event:DelayAtomic);
+    tbe.actions.push(Event:DoAtomicLocal);
+    tbe.actions.push(Event:CheckCacheFill);
+    tbe.actions.push(Event:WriteBEPipe);
+    tbe.actions.push(Event:TagArrayWrite);
+    tbe.ar_loc_amo := true;
+  }
+  // Completion: all edges done — release the sentinel so the TBE can finalize.
+  // MUST stay last (see INVARIANT in the header): the last-arriving edge sets
+  // its remaining flags in the clauses above, and this gate must see them in
+  // the same call. Do not add flag-setting clauses below this point.
+  if (tbe.ar_us_dbid && tbe.ar_us_wdat && tbe.ar_us_rdat &&
+      tbe.ar_ds_req && tbe.ar_ds_dbid && tbe.ar_ds_wdat &&
+      tbe.ar_ds_rdat && tbe.ar_ds_ack && tbe.ar_loc_amo) {
+    tbe.expected_req_resp.setExpectedCount(tbe.expected_req_resp.received());
+  }
+}
+
 void clearExpectedSnpResp(TBE tbe) {
   assert(blockSize >= data_channel_size);
   assert((blockSize % data_channel_size) == 0);
