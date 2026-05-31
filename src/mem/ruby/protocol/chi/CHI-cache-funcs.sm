@@ -962,6 +962,16 @@ void prepareRequestRetry(TBE tbe, CHIRequestMsg & out_msg) {
   out_msg.is_remote_pf := tbe.is_local_pf || tbe.is_remote_pf;
   out_msg.atomic_op.clear();
   out_msg.atomic_op.orMask(tbe.atomic_op);
+
+  // AtomicReturn uses slot routing (see Send_AtomicReturn): the retried request
+  // must carry the same usesSlotId + slot_id, otherwise the completer leaves
+  // respWithSlotId false and its DBIDResp/CompData routing diverges from what
+  // this requester expects, leaving the operand NCBWrData with no TBE at the
+  // completer (Receive_ReqDataResp is_valid(tbe) assert).
+  if (tbe.pendReqType == CHIRequestType:AtomicReturn) {
+    out_msg.txnId := tbe.slot_id;
+    out_msg.usesSlotId := true;
+  }
 }
 
 void prepareRequestRetryDVM(TBE tbe, CHIRequestMsg & out_msg) {
