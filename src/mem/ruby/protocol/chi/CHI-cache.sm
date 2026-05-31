@@ -857,6 +857,27 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool ar_ds_ack,  default="false", desc="far-AR: downstream CompAck sent (or N/A for central)";
     bool ar_loc_amo, default="false", desc="far-AR: local atomic done (migrate only; central N/A)";
 
+    // AAN fill (BAT-admit) flag-driven path: fetch ownership via ReadUnique and
+    // execute the atomic locally, overlapping the upstream operand wait with the
+    // downstream ReadUnique data wait. See Callback_AAN_Fill_Forward.
+    bool aan_fwd, default="false", desc="AAN fill: this TBE is on the flag-driven fill path";
+    bool aan_ds_req, default="false", desc="AAN fill: downstream ReadUnique sent";
+    bool aan_ds_rdat, default="false", desc="AAN fill: downstream CompData_UC/UD_PD fully received";
+    bool aan_ds_ack, default="false", desc="AAN fill: CompAck sent to HN-F for the ReadUnique";
+    bool aan_us_dbid, default="false", desc="AAN fill: upstream DBIDResp sent to requester (early)";
+    bool aan_us_wdat, default="false", desc="AAN fill: upstream NCBWrData received (operand ready)";
+    bool aan_us_rdat, default="false", desc="AAN fill: upstream CompData_I (old value) sent to requester";
+    bool aan_loc_amo, default="false", desc="AAN fill: local atomic executed + written back";
+
+    // L1D-direct atomic flag-driven path: allows DBIDResp to arrive without
+    // blocking snoops (BUSY_INTR) and CompData to route via slot. Replaces the
+    // legacy two-phase ExpectedMap (count=1 then CheckARComp count=2).
+    bool l1d_ar_fwd, default="false", desc="L1D atomic: flag-driven path";
+    bool l1d_ds_req, default="false", desc="L1D atomic: AtomicReturn sent";
+    bool l1d_ds_dbid, default="false", desc="L1D atomic: DBIDResp received";
+    bool l1d_ds_wdat, default="false", desc="L1D atomic: NCBWrData operand sent";
+    bool l1d_ds_rdat, default="false", desc="L1D atomic: CompData_I (old value) fully received";
+
     // Tracks requests sent downstream
     CHIRequestType pendReqType, desc="Sent request type";
     bool pendReqAllowRetry,     desc="Sent request can be retried";

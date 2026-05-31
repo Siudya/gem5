@@ -875,11 +875,13 @@ action(Initiate_AtomicReturn_I, desc="") {
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
   } else if (l1d_amo_policy == 1) {
-    tbe.actions.push(Event:SendAtomicReturn);
-    tbe.actions.push(Event:SendARData);
+    tbe.l1d_ar_fwd := true;
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
     tbe.atomic_to_be_done := false;
+    clearExpectedReqResp(tbe);
+    tbe.expected_req_resp.setExpectedCount(999);
+    Callback_L1D_AtomicReturn(tbe);
   } else if (l1d_amo_policy == 2) { // DYNAMO REUSE-PN
     if (dynamo.predictNear(tbe.addr, 0)) {
       // Near: fetch line and execute locally
@@ -947,11 +949,13 @@ action(Initiate_AtomicReturn_SD, desc="") {
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
   } else if (l1d_amo_policy == 1) {
-    tbe.actions.push(Event:SendAtomicReturn);
-    tbe.actions.push(Event:SendARData);
+    tbe.l1d_ar_fwd := true;
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
     tbe.atomic_to_be_done := false;
+    clearExpectedReqResp(tbe);
+    tbe.expected_req_resp.setExpectedCount(999);
+    Callback_L1D_AtomicReturn(tbe);
   } else if (l1d_amo_policy == 2) { // DYNAMO REUSE-PN
     if (dynamo.predictNear(tbe.addr, 2)) {
       // Near: upgrade to unique and execute locally
@@ -1017,11 +1021,13 @@ action(Initiate_AtomicReturn_SC, desc="") {
     tbe.actions.push(Event:TagArrayWrite);
     tbe.atomic_to_be_done := true;
   } else if (l1d_amo_policy == 1) {
-    tbe.actions.push(Event:SendAtomicReturn);
-    tbe.actions.push(Event:SendARData);
+    tbe.l1d_ar_fwd := true;
     tbe.dataToBeInvalid := true;
     tbe.doCacheFill := false;
     tbe.atomic_to_be_done := false;
+    clearExpectedReqResp(tbe);
+    tbe.expected_req_resp.setExpectedCount(999);
+    Callback_L1D_AtomicReturn(tbe);
   } else if (l1d_amo_policy == 2) { // DYNAMO REUSE-PN
     if (dynamo.predictNear(tbe.addr, 1)) {
       tbe.actions.push(Event:SendReadUnique);
@@ -1483,7 +1489,9 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       tbe.actions.push(Event:WriteBEPipe);
       tbe.actions.push(Event:TagArrayWrite);
     } else if (aanBAT.shouldAdmit(tbe.addr, aan_amo_policy == 1)) {
-      // AAN Miss + BAT Admits: fetch ownership via ReadUnique, then execute locally
+      // AAN Miss + BAT Admits: flag-driven parallel fill. Fetch ownership via
+      // ReadUnique while simultaneously accepting the upstream operand
+      // (NCBWrData). DBIDResp is sent early so the two waits overlap.
       DPRINTF(RubySlicc, "AAN Fill: BAT admitted addr=%#x\n", tbe.addr);
       aanBAT.incFill();
       amoStats.incAANMiss();
@@ -1492,14 +1500,10 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       tbe.aan_fill_read_unique := true;
       tbe.doCacheFill := true;
       tbe.dataToBeInvalid := false;
-      tbe.actions.push(Event:SendReadUnique);
-      tbe.actions.pushNB(Event:WriteFEPipe);
-      tbe.actions.push(Event:SendDBIDResp_AR);
-      tbe.actions.push(Event:SendCompData_AR);
-      tbe.actions.push(Event:DelayAtomic);
-      tbe.actions.push(Event:CheckCacheFill);
-      tbe.actions.push(Event:WriteBEPipe);
-      tbe.actions.push(Event:TagArrayWrite);
+      tbe.aan_fwd := true;
+      clearExpectedReqResp(tbe);
+      tbe.expected_req_resp.setExpectedCount(999);
+      Callback_AAN_Fill_Forward(tbe);
     } else {
       // AAN Miss + BAT Rejects: bypass — forward to HNF
       DPRINTF(RubySlicc, "AAN Bypass: BAT rejected addr=%#x\n", tbe.addr);
@@ -1583,11 +1587,13 @@ action(Initiate_AtomicReturn_Forward, desc="") {
 }
 
 action(Branch_AtomicReturn_Forward, desc="") {
-  // Flag-driven far AtomicReturn at L2: downstream DBIDResp arrived (central).
-  // Mark the downstream DBID edge and advance the callback.
+  // Flag-driven paths: downstream DBIDResp arrived. Mark the edge and advance.
   if (tbe.ar_fwd) {
     tbe.ar_ds_dbid := true;
     Callback_AtomicReturn_Forward(tbe);
+  } else if (tbe.l1d_ar_fwd) {
+    tbe.l1d_ds_dbid := true;
+    Callback_L1D_AtomicReturn(tbe);
   }
 }
 
@@ -2088,20 +2094,31 @@ action(Send_ReadOnce, desc="") {
 action(Send_ReadUnique, desc="") {
   assert((tbe.dataValid && tbe.dataUnique) == false);
 
-  assert(tbe.expected_req_resp.hasExpected() == false);
-  clearExpectedReqResp(tbe);
-  tbe.expected_req_resp.addExpectedDataType(CHIDataType:DataSepResp_UC);
-  tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UC);
-  tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UD_PD);
-  // NOTE: the first CompData received counts as RespSepData
-  tbe.expected_req_resp.addExpectedRespType(CHIResponseType:RespSepData);
-  tbe.expected_req_resp.setExpectedCount(2);
+  // AAN fill flag path holds expected_req_resp at the sentinel and tracks the
+  // ReadUnique response via aan_* flags + slot routing; do not arm/clobber the
+  // ExpectedMap here. Legacy callers keep the count=2 ExpectedMap tracking.
+  if (tbe.aan_fwd == false) {
+    assert(tbe.expected_req_resp.hasExpected() == false);
+    clearExpectedReqResp(tbe);
+    tbe.expected_req_resp.addExpectedDataType(CHIDataType:DataSepResp_UC);
+    tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UC);
+    tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UD_PD);
+    // NOTE: the first CompData received counts as RespSepData
+    tbe.expected_req_resp.addExpectedRespType(CHIResponseType:RespSepData);
+    tbe.expected_req_resp.setExpectedCount(2);
+  }
 
   enqueue(reqOutPort, CHIRequestMsg, request_latency) {
     prepareRequest(tbe, CHIRequestType:ReadUnique, out_msg);
     out_msg.Destination.add(mapAddressToDownstreamMachine(tbe.addr));
     out_msg.dataToFwdRequestor := false;
     allowRequestRetry(tbe, out_msg);
+    // AAN fill: route the downstream CompData_U* back via our slot index so a
+    // same-address snoop TBE cannot shadow it while we wait in BUSY_INTR.
+    if (tbe.aan_fwd) {
+      out_msg.txnId := tbe.slot_id;
+      out_msg.usesSlotId := true;
+    }
   }
 }
 
@@ -2287,21 +2304,17 @@ action(Send_AtomicReturn, desc="") {
     prepareRequestAtomic(tbe, CHIRequestType:AtomicReturn, out_msg);
     out_msg.Destination.add(mapAddressToAtomicReturnMachine(tbe.addr));
     allowRequestRetry(tbe, out_msg);
-    // far-AR (L2 forward): carry our local slot_id as the txnId and flag
-    // usesSlotId so the downstream completer (HNF/AAN) echoes it back; the
-    // DBIDResp/CompData then route to THIS TBE via the slot index, immune to a
-    // same-addr snoop TBE shadowing us.
-    if (tbe.ar_fwd) {
-      out_msg.txnId := tbe.slot_id;
-      out_msg.usesSlotId := true;
-    }
+    // Carry our local slot_id as the txnId and flag usesSlotId so the
+    // downstream completer echoes it back; the DBIDResp/CompData then route to
+    // THIS TBE via the slot index, immune to a same-addr snoop TBE shadowing us.
+    // All AtomicReturn paths use slot routing so that DBIDResp is not stolen by
+    // a same-addr snoop TBE and the line remains snoopable (BUSY_INTR).
+    out_msg.txnId := tbe.slot_id;
+    out_msg.usesSlotId := true;
   }
-  // Flag-driven far AtomicReturn (L2, ar_fwd) keeps the ExpectedMap at the
-  // sentinel set in Initiate_AtomicReturn_Forward and tracks downstream
-  // responses via the ar_* flags, so it must not clear/re-arm here.
-  if (tbe.ar_fwd == false) {
-    // L1D-originated AtomicReturn (TBE reqType is AtomicLoad): expect the
-    // completer's DBIDResp, then send the operand via SendARData.
+  // Flag-driven paths keep the ExpectedMap at the sentinel and track responses
+  // via flags. Legacy (non-flag) paths use the two-phase ExpectedMap.
+  if ((tbe.ar_fwd == false) && (tbe.aan_fwd == false) && (tbe.l1d_ar_fwd == false)) {
     clearExpectedReqResp(tbe);
     tbe.expected_req_resp.addExpectedRespType(CHIResponseType:DBIDResp);
     tbe.expected_req_resp.addExpectedCount(1);
@@ -2700,6 +2713,52 @@ action(Receive_ReqDataResp, desc="") {
         }
       }
     }
+  } else if (tbe.aan_fwd) {
+    // AAN fill flag-driven path. Two data streams: upstream NCBWrData (operand,
+    // payload unused) and downstream CompData_UC/UD_PD (ReadUnique ownership).
+    // dataBlkValid tracks only the CompData stream (NCBWrData doesn't write it).
+    peek(datInPort, CHIDataMsg) {
+      if (in_msg.type == CHIDataType:NCBWrData) {
+        // Upstream operand beat: payload unused, just record the edge.
+        tbe.aan_us_wdat := true;
+        Callback_AAN_Fill_Forward(tbe);
+      } else {
+        // Downstream CompData_UC/UD_PD beat. Accumulate into dataBlk.
+        if (tbe.dataBlkValid.isFull()) {
+          tbe.dataBlkValid.clear();
+        }
+        tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+        assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
+        tbe.dataBlkValid.orMask(in_msg.bitMask);
+        if (tbe.dataBlkValid.isFull()) {
+          tbe.dataValid := true;
+          tbe.dataUnique := true;
+          tbe.dataDirty := (in_msg.type == CHIDataType:CompData_UD_PD);
+          // Snapshot the pre-atomic value NOW (before DoAtomicLocal can run),
+          // so SendCompData_AR returns the correct old value to the requester.
+          tbe.oldDataBlk := tbe.dataBlk;
+          tbe.aan_ds_rdat := true;
+          Callback_AAN_Fill_Forward(tbe);
+        }
+      }
+    }
+  } else if (tbe.l1d_ar_fwd) {
+    // L1D-direct atomic flag path. Only receives CompData_I (old value) from
+    // the completer (L2/AAN/HNF). NCBWrData is outgoing only (L1D sends it).
+    peek(datInPort, CHIDataMsg) {
+      if (tbe.dataBlkValid.isFull()) {
+        tbe.dataBlkValid.clear();
+      }
+      tbe.oldDataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+      assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
+      tbe.dataBlkValid.orMask(in_msg.bitMask);
+      if (tbe.dataBlkValid.isFull()) {
+        tbe.dataValid := true;
+        tbe.dataAMOValid := true;
+        tbe.l1d_ds_rdat := true;
+        Callback_L1D_AtomicReturn(tbe);
+      }
+    }
   } else {
     assert(tbe.expected_req_resp.hasExpected());
     peek(datInPort, CHIDataMsg) {
@@ -2745,9 +2804,9 @@ action(Receive_ReqDataResp, desc="") {
 
 action(Receive_RespSepDataFromCompData, desc="") {
   assert(is_valid(tbe));
-  // Flag-driven far AtomicReturn (L2 forward) tracks data via ar_* flags in
+  // Flag-driven paths (L2 far-AR / AAN fill) track data via flags in
   // Receive_ReqDataResp, not through the ExpectedMap RespSepData accounting.
-  if (tbe.ar_fwd == false) {
+  if ((tbe.ar_fwd == false) && (tbe.aan_fwd == false) && (tbe.l1d_ar_fwd == false)) {
     assert(tbe.expected_req_resp.hasExpected());
 
     // check if a previous CompData msg already counted as a RespSepData
@@ -3236,9 +3295,9 @@ action(UpdateDirState_FromSnpResp, desc="") {
 }
 
 action(Receive_ReqResp, desc="") {
-  // Flag-driven far AtomicReturn (L2 forward) does not track responses through
-  // the ExpectedMap; its DBIDResp edge is handled in Branch_AtomicReturn_Forward.
-  if (tbe.ar_fwd == false) {
+  // Flag-driven paths do not track responses through the ExpectedMap; their
+  // DBIDResp edge is handled in Branch_AtomicReturn_Forward / callbacks.
+  if ((tbe.ar_fwd == false) && (tbe.l1d_ar_fwd == false)) {
     assert(tbe.expected_req_resp.hasExpected());
     peek(rspInPort, CHIResponseMsg) {
       // Decrement pending
@@ -3263,16 +3322,16 @@ action(Receive_ReqResp_WUComp, desc="") {
 }
 
 action(Receive_ReqResp_CopyDBID, desc="Copy the rsp DBID into the TBE") {
-  if (tbe.ar_fwd == false) {
+  if ((tbe.ar_fwd == false) && (tbe.l1d_ar_fwd == false)) {
     if (tbe.expected_req_resp.receivedRespType(CHIResponseType:DBIDResp) == false &&
         tbe.expected_req_resp.receivedRespType(CHIResponseType:CompDBIDResp) == false) {
       error("Received unexpected message");
     }
   }
   peek(rspInPort, CHIResponseMsg) {
-    // far-AR keeps its own slot_id in txnId (routing key); capture the peer's
-    // DBID separately. Non-far paths keep the legacy behaviour.
-    if (tbe.ar_fwd) {
+    // Flag-driven paths keep slot_id in txnId (routing key); capture the peer's
+    // DBID separately. Non-flag paths keep the legacy behaviour (overwrite txnId).
+    if (tbe.ar_fwd || tbe.l1d_ar_fwd) {
       tbe.requestorSlot := in_msg.dbid;
     } else {
       tbe.txnId := in_msg.dbid;
@@ -3500,15 +3559,20 @@ action(Send_ANRData, desc="") {
 
 action(CheckARComp, desc="") {
   assert(is_valid(tbe));
-  clearExpectedReqResp(tbe);
-  if (tbe.is_delegato_migrate) {
-    tbe.expected_req_resp.setExpectedCount(0);
+  // Flag-driven paths (l1d_ar_fwd) keep the sentinel; do not clear/re-arm.
+  if (tbe.l1d_ar_fwd) {
+    // no-op: completion tracked by flags
   } else {
-    tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_I);
-    tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UD_PD);
-    tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UC);
-    tbe.expected_req_resp.addExpectedRespType(CHIResponseType:RespSepData);
-    tbe.expected_req_resp.setExpectedCount(2);
+    clearExpectedReqResp(tbe);
+    if (tbe.is_delegato_migrate) {
+      tbe.expected_req_resp.setExpectedCount(0);
+    } else {
+      tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_I);
+      tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UD_PD);
+      tbe.expected_req_resp.addExpectedDataType(CHIDataType:CompData_UC);
+      tbe.expected_req_resp.addExpectedRespType(CHIResponseType:RespSepData);
+      tbe.expected_req_resp.setExpectedCount(2);
+    }
   }
 }
 
@@ -3726,8 +3790,18 @@ action(Send_Data, desc="") {
     // slot (its DBID, captured in requestorSlot) + usesSlotId so the completer
     // routes it to its own TBE. Upstream CompData_I to the L1D keeps addr
     // routing (txnId echo handled below for the response path).
-    if (tbe.ar_fwd && (tbe.snd_msgType == CHIDataType:NCBWrData)) {
+    if ((tbe.ar_fwd || tbe.l1d_ar_fwd) && (tbe.snd_msgType == CHIDataType:NCBWrData)) {
       out_msg.txnId := tbe.requestorSlot;
+      out_msg.usesSlotId := true;
+    } else if ((tbe.reqType == CHIRequestType:AtomicReturn ||
+                tbe.reqType == CHIRequestType:AtomicLoad) &&
+               (tbe.snd_msgType == CHIDataType:NCBWrData)) {
+      // Legacy AtomicReturn requester (L1D policy==2 far, L2 near): the operand
+      // NCBWrData must route to the completer's req TBE by slot, not by addr.
+      // The completer's DBID was captured into tbe.txnId by Receive_ReqResp_CopyDBID.
+      // Without this, a same-addr snoop TBE at the completer would shadow the req
+      // TBE and the NCBWrData would hit the else branch with no expectation.
+      out_msg.txnId := tbe.txnId;
       out_msg.usesSlotId := true;
     } else if (tbe.respWithSlotId) {
       // Completer role: echo the requester's slot_id so its CompData routes via
@@ -4404,7 +4478,7 @@ action(Callback_Miss, desc="") {
   // (ar_fwd L2 forward handles migrate inline in Receive_ReqDataResp.)
   } else if (!is_HN && tbe.dataValid && tbe.dataUnique &&
              (tbe.reqType == CHIRequestType:AtomicReturn) &&
-             !tbe.dataAMOValid && !tbe.ar_fwd) {
+             !tbe.dataAMOValid && !tbe.ar_fwd && !tbe.aan_fwd) {
     if (tbe.is_aan_hit) {
       // AAN fill: CompData has arrived, but the AMO operand may still be
       // pending in NCBWrData. Keep the line resident for local execution.
@@ -4577,9 +4651,15 @@ action(Profile_OutgoingEnd_DataResp, desc="") {
   assert(is_valid(tbe));
   // completes once all data is received
   if (tbe.ar_fwd) {
-    // flag-driven far AtomicReturn: the downstream request (SendAtomicReturn)
-    // opened the outgoing transaction; end it once its CompData line is in.
     if (tbe.ar_ds_rdat) {
+      outgoingTransactionEnd(address, tbe.rcvdRetryAck);
+    }
+  } else if (tbe.aan_fwd) {
+    if (tbe.aan_ds_rdat) {
+      outgoingTransactionEnd(address, tbe.rcvdRetryAck);
+    }
+  } else if (tbe.l1d_ar_fwd) {
+    if (tbe.l1d_ds_rdat) {
       outgoingTransactionEnd(address, tbe.rcvdRetryAck);
     }
   } else if (tbe.expected_req_resp.hasReceivedData()) {

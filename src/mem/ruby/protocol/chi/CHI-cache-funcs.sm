@@ -470,12 +470,10 @@ void Callback_AtomicReturn_Forward(TBE tbe) {
     tbe.ar_ds_req := true;
   }
   // Upstream: ack the L1D with a DBIDResp so it sends us the operand NCBWrData.
-  // Deferred until the downstream DBID is in (ar_ds_dbid): sending it earlier
-  // pushes the L1D from BUSY_INTR to BUSY_BLKD, where it would stall the HN's
-  // invalidation snoop on this line and deadlock. Holding it keeps the L1D
-  // snoopable through the invalidation window (matches the legacy ordering
-  // where the upstream DBIDResp follows the downstream DBIDResp).
-  if ((tbe.ar_us_dbid == false) && tbe.ar_ds_dbid) {
+  // The L1D now uses flag-driven slot routing (l1d_ar_fwd): its DBIDResp routes
+  // to DBIDResp_AR (BUSY_INTR, snoopable) and its CompData routes via slot.
+  // No need to defer past the downstream DBID.
+  if (tbe.ar_us_dbid == false) {
     tbe.actions.pushNB(Event:SendDBIDResp_AR_Fwd);
     tbe.ar_us_dbid := true;
   }
@@ -517,6 +515,87 @@ void Callback_AtomicReturn_Forward(TBE tbe) {
   if (tbe.ar_us_dbid && tbe.ar_us_wdat && tbe.ar_us_rdat &&
       tbe.ar_ds_req && tbe.ar_ds_dbid && tbe.ar_ds_wdat &&
       tbe.ar_ds_rdat && tbe.ar_ds_ack && tbe.ar_loc_amo) {
+    tbe.expected_req_resp.setExpectedCount(tbe.expected_req_resp.received());
+  }
+}
+
+// Flag-driven AAN fill (BAT-admit): fetch ownership via ReadUnique and execute
+// the atomic locally, overlapping the upstream operand wait (NCBWrData) with the
+// downstream ReadUnique data wait (CompData_UC/UD_PD). Called from every input
+// edge after it sets its flag. expected_req_resp is held at a sentinel (set in
+// Initiate_AtomicReturn_Forward) and released by the completion gate.
+//
+// INVARIANT: the completion gate MUST be the last clause (same reason as
+// Callback_AtomicReturn_Forward).
+void Callback_AAN_Fill_Forward(TBE tbe) {
+  assert(is_valid(tbe));
+  assert(tbe.aan_fwd);
+
+  // Downstream: fetch ownership via ReadUnique.
+  if (tbe.aan_ds_req == false) {
+    tbe.actions.pushNB(Event:SendReadUnique);
+    tbe.aan_ds_req := true;
+  }
+  // Upstream: ack the requester early (does not wait for the downstream data),
+  // so its operand NCBWrData starts coming back in parallel with ReadUnique.
+  // Safe: the L1D now uses l1d_ar_fwd (BUSY_INTR + slot routing).
+  if (tbe.aan_us_dbid == false) {
+    tbe.actions.pushNB(Event:SendDBIDResp_AR_Fwd);
+    tbe.aan_us_dbid := true;
+  }
+  // Downstream: once the ReadUnique data is in, ack the HN-F (CompAck) to
+  // complete the ReadUnique.
+  if ((tbe.aan_ds_ack == false) && tbe.aan_ds_rdat) {
+    tbe.actions.pushNB(Event:SendCompAck);
+    tbe.aan_ds_ack := true;
+  }
+  // Upstream: once the data is in, return CompData_I (the pre-atomic old value,
+  // snapshotted into oldDataBlk when aan_ds_rdat was set).
+  if ((tbe.aan_us_rdat == false) && tbe.aan_ds_rdat) {
+    tbe.actions.pushNB(Event:SendCompData_AR);
+    tbe.aan_us_rdat := true;
+  }
+  // Local execution: needs the fetched data (aan_ds_rdat) and the operand ready
+  // (aan_us_wdat). Independent of whether the old value has been returned yet.
+  if ((tbe.aan_loc_amo == false) && tbe.aan_ds_rdat && tbe.aan_us_wdat) {
+    tbe.actions.push(Event:DelayAtomic);
+    tbe.actions.push(Event:DoAtomicLocal);
+    tbe.actions.push(Event:CheckCacheFill);
+    tbe.actions.push(Event:WriteBEPipe);
+    tbe.actions.push(Event:TagArrayWrite);
+    tbe.aan_loc_amo := true;
+  }
+  // Completion gate (MUST stay last): all edges done -> release the sentinel.
+  if (tbe.aan_ds_req && tbe.aan_ds_rdat && tbe.aan_ds_ack &&
+      tbe.aan_us_dbid && tbe.aan_us_wdat && tbe.aan_us_rdat &&
+      tbe.aan_loc_amo) {
+    tbe.expected_req_resp.setExpectedCount(tbe.expected_req_resp.received());
+  }
+}
+
+// Flag-driven L1D-direct atomic: send AtomicReturn, receive DBIDResp (BUSY_INTR,
+// snoopable), send NCBWrData operand, receive CompData_I (old value via slot).
+// The sequencer atomicCallback fires from Callback_Miss once dataAMOValid is set.
+//
+// INVARIANT: completion gate MUST be last clause.
+void Callback_L1D_AtomicReturn(TBE tbe) {
+  assert(is_valid(tbe));
+  assert(tbe.l1d_ar_fwd);
+
+  // Send the AtomicReturn request downstream.
+  if (tbe.l1d_ds_req == false) {
+    tbe.actions.pushNB(Event:SendAtomicReturn);
+    tbe.l1d_ds_req := true;
+  }
+  // Send the operand NCBWrData once the completer granted a DBID.
+  if ((tbe.l1d_ds_wdat == false) && tbe.l1d_ds_dbid) {
+    tbe.actions.pushNB(Event:SendARData);
+    tbe.l1d_ds_wdat := true;
+  }
+  // Completion gate (MUST stay last): all edges done -> release sentinel.
+  // Callback_Miss will fire atomicCallback once dataAMOValid is set by
+  // UpdateDataState_FromReqDataResp (CompData_I sets dataAMOValid).
+  if (tbe.l1d_ds_req && tbe.l1d_ds_dbid && tbe.l1d_ds_wdat && tbe.l1d_ds_rdat) {
     tbe.expected_req_resp.setExpectedCount(tbe.expected_req_resp.received());
   }
 }
@@ -1492,11 +1571,15 @@ Event respToEvent (CHIResponseType type, TBE tbe) {
   } else if (type == CHIResponseType:CompDBIDResp) {
     return Event:CompDBIDResp;
   } else if (type == CHIResponseType:DBIDResp) {
-    // A far-AR forward (ar_fwd) DBIDResp is only a write-buffer grant, not a
-    // completion: we still owe the downstream NCBWrData and await CompData.
-    // Route it to DBIDResp_AR whose transition keeps us in BUSY_INTR
-    // (snoopable), so an HN invalidation snoop on this line is not stalled.
-    if (is_valid(tbe) && tbe.ar_fwd) {
+    // An AtomicReturn DBIDResp is only a write-buffer grant, not a completion:
+    // we still owe the downstream NCBWrData and await CompData. Route it to
+    // DBIDResp_AR whose transition keeps us in BUSY_INTR (snoopable), so an HN
+    // invalidation snoop on this line is not stalled.
+    // All AtomicReturn requesters (L1D and L2) use slot routing so the response
+    // finds the correct TBE even when a same-addr snoop TBE exists.
+    if (is_valid(tbe) &&
+        (tbe.reqType == CHIRequestType:AtomicReturn ||
+         tbe.reqType == CHIRequestType:AtomicLoad)) {
       return Event:DBIDResp_AR;
     }
     return Event:DBIDResp;
