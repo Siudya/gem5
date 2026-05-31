@@ -1709,8 +1709,21 @@ transition(BUSY_INTR, CompDBIDResp, BUSY_BLKD) {
 transition({BUSY_INTR,BUSY_BLKD}, DBIDResp, BUSY_BLKD) {
   Receive_ReqResp;
   Receive_ReqResp_CopyDBID;
-  Branch_AtomicReturn_Forward;
   Receive_ReqResp_WUNeedComp;
+  Pop_RespInQueue;
+  ProcessNextState;
+}
+
+// far-AR (ar_fwd) DBIDResp: a write-buffer grant, not a completion. Stay in
+// BUSY_INTR so the line remains snoopable while we still owe the downstream
+// NCBWrData and await the CompData old value. Going to BUSY_BLKD here would
+// stall an HN invalidation snoop on this line and could deadlock; slot routing
+// (usesSlotId) ensures the later CompData still finds THIS TBE, not a same-addr
+// snoop TBE.
+transition({BUSY_INTR,BUSY_BLKD}, DBIDResp_AR, BUSY_INTR) {
+  Receive_ReqResp;
+  Receive_ReqResp_CopyDBID;
+  Branch_AtomicReturn_Forward;
   Pop_RespInQueue;
   ProcessNextState;
 }

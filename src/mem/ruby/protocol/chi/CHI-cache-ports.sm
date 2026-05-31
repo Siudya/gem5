@@ -85,6 +85,12 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
         TBE tbe := getDvmTBE(in_msg.txnId);
         trigger(respToEvent(in_msg.type, tbe), in_msg.txnId,
                 nullCacheEntry(), tbe);
+      } else if (in_msg.usesSlotId) {
+        // far-AR: route to the request/snoop TBE by its local slot_id, not by
+        // addr (avoids a same-addr snoop TBE shadowing the response).
+        TBE tbe := getCurrentActiveTBEBySlot(in_msg.txnId);
+        trigger(respToEvent(in_msg.type, tbe), in_msg.addr,
+                getCacheEntry(in_msg.addr), tbe);
       } else {
         TBE tbe := getCurrentActiveTBE(in_msg.addr);
         trigger(respToEvent(in_msg.type, tbe), in_msg.addr,
@@ -105,11 +111,17 @@ in_port(datInPort, CHIDataMsg, datIn, rank=9,
   if (datInPort.isReady(clockEdge())) {
     printResources();
     peek(datInPort, CHIDataMsg) {
-      // We don't have any transactions that use data requests
-      assert(!in_msg.usesTxnId);
       assert((in_msg.bitMask.count() <= data_channel_size) && (in_msg.bitMask.count() > 0));
-      trigger(dataToEvent(in_msg.type), in_msg.addr,
-              getCacheEntry(in_msg.addr), getCurrentActiveTBE(in_msg.addr));
+      if (in_msg.usesSlotId) {
+        // far-AR: route the data (CompData/NCBWrData) to the TBE by local
+        // slot_id, not by addr.
+        TBE tbe := getCurrentActiveTBEBySlot(in_msg.txnId);
+        trigger(dataToEvent(in_msg.type), in_msg.addr,
+                getCacheEntry(in_msg.addr), tbe);
+      } else {
+        trigger(dataToEvent(in_msg.type), in_msg.addr,
+                getCacheEntry(in_msg.addr), getCurrentActiveTBE(in_msg.addr));
+      }
     }
   }
 }

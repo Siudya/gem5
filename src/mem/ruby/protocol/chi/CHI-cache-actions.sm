@@ -2287,6 +2287,14 @@ action(Send_AtomicReturn, desc="") {
     prepareRequestAtomic(tbe, CHIRequestType:AtomicReturn, out_msg);
     out_msg.Destination.add(mapAddressToAtomicReturnMachine(tbe.addr));
     allowRequestRetry(tbe, out_msg);
+    // far-AR (L2 forward): carry our local slot_id as the txnId and flag
+    // usesSlotId so the downstream completer (HNF/AAN) echoes it back; the
+    // DBIDResp/CompData then route to THIS TBE via the slot index, immune to a
+    // same-addr snoop TBE shadowing us.
+    if (tbe.ar_fwd) {
+      out_msg.txnId := tbe.slot_id;
+      out_msg.usesSlotId := true;
+    }
   }
   // Flag-driven far AtomicReturn (L2, ar_fwd) keeps the ExpectedMap at the
   // sentinel set in Initiate_AtomicReturn_Forward and tracks downstream
@@ -2310,6 +2318,10 @@ action(Send_AtomicReturn_AANTransparentBypass, desc="") {
     out_msg.requestor := tbe.requestor;
     out_msg.fwdRequestor := tbe.requestor;
     out_msg.allowRetry := true;
+    // Carry the original requester's slot-routing intent + its slot_id (held in
+    // tbe.txnId) so the HN-F echoes usesSlotId back to the RN-F, which routes
+    // the response via its slot index. (txnId already set by prepareRequest.)
+    out_msg.usesSlotId := tbe.respWithSlotId;
     out_msg.Destination.add(mapAddressToDownstreamMachine(tbe.addr));
   }
   clearExpectedReqResp(tbe);
@@ -3258,7 +3270,13 @@ action(Receive_ReqResp_CopyDBID, desc="Copy the rsp DBID into the TBE") {
     }
   }
   peek(rspInPort, CHIResponseMsg) {
-    tbe.txnId := in_msg.dbid;
+    // far-AR keeps its own slot_id in txnId (routing key); capture the peer's
+    // DBID separately. Non-far paths keep the legacy behaviour.
+    if (tbe.ar_fwd) {
+      tbe.requestorSlot := in_msg.dbid;
+    } else {
+      tbe.txnId := in_msg.dbid;
+    }
     tbe.pendReqDest.clear();
     tbe.pendReqDest.add(in_msg.responder);
   }
@@ -3704,6 +3722,19 @@ action(Send_Data, desc="") {
     out_msg.addr := tbe.addr;
     out_msg.type := tbe.snd_msgType;
     out_msg.txnId := tbe.txnId;
+    // far-AR: the downstream NCBWrData (operand) must carry the peer completer's
+    // slot (its DBID, captured in requestorSlot) + usesSlotId so the completer
+    // routes it to its own TBE. Upstream CompData_I to the L1D keeps addr
+    // routing (txnId echo handled below for the response path).
+    if (tbe.ar_fwd && (tbe.snd_msgType == CHIDataType:NCBWrData)) {
+      out_msg.txnId := tbe.requestorSlot;
+      out_msg.usesSlotId := true;
+    } else if (tbe.respWithSlotId) {
+      // Completer role: echo the requester's slot_id so its CompData routes via
+      // the slot index (set when this TBE was allocated from a usesSlotId req).
+      out_msg.txnId := tbe.txnId;
+      out_msg.usesSlotId := true;
+    }
 
     int offset := tbe.snd_pendBytes.firstBitSet(true);
     assert(offset < blockSize);
@@ -3866,6 +3897,15 @@ action(Send_DBIDResp, desc="") {
     out_msg.responder := machineID;
     out_msg.Destination.add(tbe.requestor);
     out_msg.dbid := tbe.txnId;
+    // far-AR: route this DBIDResp to the requester via ITS slot (txnId =
+    // requester's slot, held in tbe.txnId). dbid must be OUR OWN slot_id so the
+    // requester's NCBWrData comes back tagged with it and we lookupBySlot to
+    // find this completer TBE.
+    if (tbe.respWithSlotId) {
+      out_msg.usesSlotId := true;
+      out_msg.txnId := tbe.txnId;
+      out_msg.dbid := tbe.slot_id;
+    }
   }
 }
 
@@ -4882,6 +4922,11 @@ action(Send_SnpAMO, desc="Delegato: Send SnpAMO carrying atomic_op to owner") {
     prepareRequest(tbe, CHIRequestType:SnpAMO, out_msg);
     out_msg.Destination.add(tbe.dir_owner);
     out_msg.fwdRequestor := fwd_requestor;
+    // Propagate the original requester's slot-routing intent to the owner:
+    // out_msg.txnId (set by prepareRequest = tbe.txnId) already carries the
+    // requester's slot_id (far path); usesSlotId says "route owner->requester
+    // responses via that slot". near (L1D-direct) requesters leave it false.
+    out_msg.usesSlotId := tbe.respWithSlotId;
     // Carry the atomic operation
     out_msg.atomic_op.clear();
     out_msg.atomic_op.orMask(tbe.atomic_op);
@@ -4989,7 +5034,17 @@ action(Send_SnpAMODBIDResp, desc="Delegato: Owner sends DBIDResp to requester") 
     out_msg.type := CHIResponseType:DBIDResp;
     out_msg.responder := machineID;
     out_msg.Destination.add(tbe.fwdRequestor);
-    out_msg.dbid := tbe.txnId;
+    // dbid = this owner snp TBE's local slot_id, so the requester sends its
+    // NCBWrData operand back tagged with it (+usesSlotId) and we route it to
+    // THIS snp TBE via the slot index — immune to a same-addr req TBE.
+    out_msg.dbid := tbe.slot_id;
+    // far-AR: route this DBIDResp to the requester via ITS slot. tbe.txnId
+    // holds the requester's slot_id (propagated on the SnpAMO). near (L1D)
+    // requesters leave respWithSlotId false -> legacy addr routing.
+    if (tbe.respWithSlotId) {
+      out_msg.txnId := tbe.txnId;
+      out_msg.usesSlotId := true;
+    }
   }
 
   int num_msgs := tbe.accSize / data_channel_size;

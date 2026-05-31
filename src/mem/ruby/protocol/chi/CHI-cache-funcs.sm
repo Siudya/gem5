@@ -188,6 +188,26 @@ TBE getCurrentActiveTBE(Addr addr), return_by_pointer="yes" {
   return OOD;
 }
 
+// far-AR (txnId/slot routing): resolve a TBE by its globally-unique local
+// slot_id across the snp/req/repl tables. slot_id carries a type tag so it is
+// unique across tables; unlike getCurrentActiveTBE there is no snoop-priority
+// ambiguity — the slot_id names exactly one TBE.
+TBE getCurrentActiveTBEBySlot(Addr slot), return_by_pointer="yes" {
+  TBE snp_tbe := snpTBEs.lookupBySlot(slot);
+  if (is_valid(snp_tbe)) {
+    return snp_tbe;
+  }
+  TBE req_tbe := TBEs.lookupBySlot(slot);
+  if (is_valid(req_tbe)) {
+    return req_tbe;
+  }
+  TBE repl_tbe := replTBEs.lookupBySlot(slot);
+  if (is_valid(repl_tbe)) {
+    return repl_tbe;
+  }
+  return OOD;
+}
+
 AccessPermission getAccessPermission(Addr addr) {
   TBE tbe := getCurrentActiveTBE(addr);
   if(is_valid(tbe)) {
@@ -407,6 +427,15 @@ void notifyCoalesced(Addr addr, RubyRequestType type, RequestPtr req,
 // Helper functions
 
 
+// Build a globally-unique local slot_id for a TBE from its type tag and
+// per-pool storSlot: slot_id = type_tag * slot_id_stride + storSlot.
+// Tags are 1=req, 2=snp, 3=repl (tag 0 is avoided so no slot_id collides
+// with the sequencer sentinel range). Used as the key of the slot->TBE
+// index (txnId routing).
+Addr makeSlotId(int type_tag, int storSlot) {
+  return intToAddress((type_tag * slot_id_stride) + storSlot);
+}
+
 void clearExpectedReqResp(TBE tbe) {
   assert(blockSize >= data_channel_size);
   assert((blockSize % data_channel_size) == 0);
@@ -540,12 +569,17 @@ TBE allocateRequestTBE(Addr addr, CHIRequestMsg in_msg), return_by_pointer="yes"
   TBE tbe := TBEs[addr];
 
   initializeTBE(tbe, addr, storTBEs.addEntryToNewSlot());
+  // Globally-unique local slot_id (type tag 1=req) + register slot index.
+  tbe.slot_id := makeSlotId(1, tbe.storSlot);
+  TBEs.registerSlot(tbe.slot_id, addr);
   if (fromSequencer(in_msg.type)) {
     assert(in_msg.txnId == max_outstanding_transactions);
     tbe.txnId := static_cast(Addr, "value", tbe.storSlot);
   } else {
     tbe.txnId := in_msg.txnId;
   }
+  // far-AR: remember to echo usesSlotId on responses this completer sends back.
+  tbe.respWithSlotId := in_msg.usesSlotId;
   tbe.ns := in_msg.ns;
 
   assert(tbe.is_snp_tbe == false);
@@ -624,6 +658,8 @@ TBE allocateSnoopTBE(Addr addr, CHIRequestMsg in_msg), return_by_pointer="yes" {
   snpTBEs.allocate(addr);
   TBE tbe := snpTBEs[addr];
   initializeTBE(tbe, addr, storSnpTBEs.addEntryToNewSlot());
+  tbe.slot_id := makeSlotId(2, tbe.storSlot);
+  snpTBEs.registerSlot(tbe.slot_id, addr);
 
   assert(tbe.is_req_tbe == false);
   assert(tbe.is_repl_tbe == false);
@@ -637,6 +673,10 @@ TBE allocateSnoopTBE(Addr addr, CHIRequestMsg in_msg), return_by_pointer="yes" {
   tbe.fwdRequestor := in_msg.fwdRequestor;
   tbe.reqType := in_msg.type;
   tbe.txnId := in_msg.txnId;
+  // far-AR SnpAMO: in_msg.txnId carries the original requester's slot_id and
+  // usesSlotId says owner->requester responses must echo it. Record the intent
+  // so Send_SnpAMODBIDResp/Send_SnpAMOCompData route via the slot index.
+  tbe.respWithSlotId := in_msg.usesSlotId;
 
   tbe.snpNeedsData := in_msg.retToSrc;
 
@@ -690,6 +730,8 @@ TBE allocateDvmSnoopTBE(Addr txnId, CHIRequestMsg in_msg), return_by_pointer="ye
 TBE _allocateReplacementTBE(Addr addr, int storSlot), return_by_pointer="yes" {
   TBE tbe := replTBEs[addr];
   initializeTBE(tbe, addr, storSlot);
+  tbe.slot_id := makeSlotId(3, storSlot);
+  replTBEs.registerSlot(tbe.slot_id, addr);
 
   assert(tbe.is_req_tbe == false);
   assert(tbe.is_snp_tbe == false);
@@ -1098,6 +1140,7 @@ void copyCacheAndDirTBEs(TBE src, TBE dst) {
 void deallocateReqTBE(TBE tbe) {
   assert(is_valid(tbe));
   assert(tbe.is_req_tbe);
+  TBEs.deregisterSlot(tbe.slot_id);
   storTBEs.removeEntryFromSlot(tbe.storSlot);
   TBEs.deallocate(tbe.addr);
 }
@@ -1105,6 +1148,7 @@ void deallocateReqTBE(TBE tbe) {
 void deallocateSnpTBE(TBE tbe) {
   assert(is_valid(tbe));
   assert(tbe.is_snp_tbe);
+  snpTBEs.deregisterSlot(tbe.slot_id);
   storSnpTBEs.removeEntryFromSlot(tbe.storSlot);
   snpTBEs.deallocate(tbe.addr);
 }
@@ -1112,6 +1156,7 @@ void deallocateSnpTBE(TBE tbe) {
 void deallocateReplacementTBE(TBE tbe) {
   assert(is_valid(tbe));
   assert(tbe.is_repl_tbe);
+  replTBEs.deregisterSlot(tbe.slot_id);
   if (unify_repl_TBEs) {
     storTBEs.removeEntryFromSlot(tbe.storSlot);
   } else {
@@ -1447,6 +1492,13 @@ Event respToEvent (CHIResponseType type, TBE tbe) {
   } else if (type == CHIResponseType:CompDBIDResp) {
     return Event:CompDBIDResp;
   } else if (type == CHIResponseType:DBIDResp) {
+    // A far-AR forward (ar_fwd) DBIDResp is only a write-buffer grant, not a
+    // completion: we still owe the downstream NCBWrData and await CompData.
+    // Route it to DBIDResp_AR whose transition keeps us in BUSY_INTR
+    // (snoopable), so an HN invalidation snoop on this line is not stalled.
+    if (is_valid(tbe) && tbe.ar_fwd) {
+      return Event:DBIDResp_AR;
+    }
     return Event:DBIDResp;
   } else if (type == CHIResponseType:Comp) {
     return Event:Comp;

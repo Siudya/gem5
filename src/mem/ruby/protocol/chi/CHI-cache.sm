@@ -89,6 +89,15 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   // Maximum number of outstanding transactions from a single requester
   Addr max_outstanding_transactions := 1024;
 
+  // Stride between per-TBE-type slot_id ranges. A globally-unique local
+  // slot_id = type_tag * slot_id_stride + storSlot (computed in makeSlotId).
+  // The stride must exceed any TBE pool capacity (<=32) and the sequencer
+  // "no upstream txnId" sentinel (max_outstanding_transactions=1024). 4096 is
+  // a comfortable round power-of-two margin. (slot->TBE index key; see
+  // TBE.slot_id.) NOTE: machine-param defaults only accept literals, so the
+  // tag*stride arithmetic lives in makeSlotId(), not here.
+  int slot_id_stride := 4096;
+
   // Recycle latency on resource stalls
   Cycles stall_recycle_lat := 1;
 
@@ -393,6 +402,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     Comp_SC,                 desc="";
     CompDBIDResp,            desc="";
     DBIDResp,                desc="";
+    DBIDResp_AR,             desc="far-AR DBIDResp (usesSlotId): a write-buffer grant, not a completion; stays in BUSY_INTR so the line remains snoopable";
     Comp,                    desc="";
     ReadReceipt,             desc="";
     RespSepData,             desc="";
@@ -709,6 +719,24 @@ machine(MachineType:Cache, "Cache coherency protocol") :
 
     int storSlot, desc="Slot in the storage tracker occupied by this entry";
 
+    // Globally-unique local id for this TBE = type tag + storSlot. Used as the
+    // key of the slot->TBE index (txnId routing). Distinct from txnId, which
+    // may carry an upstream/peer id. Set at allocation once the TBE type is
+    // known. (A0: index maintained but routing still by addr.)
+    Addr slot_id, default="-1";
+
+    // far-AR: when set, responses this (completer-role) TBE sends back must
+    // echo usesSlotId so the requester routes them via its slot index. Copied
+    // from the incoming request's usesSlotId at allocation.
+    bool respWithSlotId, default="false";
+
+    // far-AR: the peer/completer's slot id (its DBID), captured from a received
+    // DBIDResp/CompDBIDResp. Used as the txnId of the write data (NCBWrData)
+    // we send back to that peer, with usesSlotId so the peer routes it to its
+    // own TBE. Replaces the old "overwrite tbe.txnId with in_msg.dbid", which
+    // would clobber our own slot_id routing key.
+    Addr requestorSlot, default="-1";
+
     // Transaction info mostly extracted from the request message
     Addr addr,              desc="Line address for this TBE";
     Addr accAddr,           desc="Access address for Load/Store/WriteUniquePtl; otherwisse == addr";
@@ -856,6 +884,9 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     void allocate(Addr);
     void deallocate(Addr);
     bool isPresent(Addr);
+    void registerSlot(Addr, Addr);
+    void deregisterSlot(Addr);
+    TBE lookupBySlot(Addr);
   }
 
   structure(TBEStorage, external ="yes") {

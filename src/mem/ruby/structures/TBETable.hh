@@ -76,6 +76,15 @@ class TBETable
     ENTRY *getNullEntry();
     ENTRY *lookup(Addr address);
 
+    // Slot-index (txnId routing): a side map slot_id -> ENTRY* into m_map.
+    // m_map remains the sole owner of the ENTRY; m_slot_map only holds
+    // pointers, which std::unordered_map guarantees stable across rehash.
+    // Lifecycle MUST be kept in sync: register after allocate(addr), and
+    // deregister before deallocate(addr).
+    void registerSlot(Addr slot, Addr address);
+    void deregisterSlot(Addr slot);
+    ENTRY *lookupBySlot(Addr slot);
+
     // Print cache contents
     void print(std::ostream& out) const;
 
@@ -86,6 +95,8 @@ class TBETable
 
     // Data Members (m_prefix)
     std::unordered_map<Addr, ENTRY> m_map;
+    // slot_id -> pointer to the ENTRY stored in m_map (see registerSlot)
+    std::unordered_map<Addr, ENTRY*> m_slot_map;
 
   private:
     int m_number_of_TBEs = 0;
@@ -156,6 +167,37 @@ inline ENTRY*
 TBETable<ENTRY>::lookup(Addr address)
 {
   if (m_map.find(address) != m_map.end()) return &(m_map.find(address)->second);
+  return NULL;
+}
+
+// Register a slot_id -> ENTRY* mapping for the TBE currently at `address`.
+// Must be called after allocate(address). The stored pointer aliases the
+// ENTRY owned by m_map and stays valid across rehash (only the m_map erase
+// for this address invalidates it, hence deregisterSlot before deallocate).
+template<class ENTRY>
+inline void
+TBETable<ENTRY>::registerSlot(Addr slot, Addr address)
+{
+    assert(m_map.find(address) != m_map.end());
+    assert(m_slot_map.find(slot) == m_slot_map.end());
+    m_slot_map[slot] = &(m_map.find(address)->second);
+}
+
+template<class ENTRY>
+inline void
+TBETable<ENTRY>::deregisterSlot(Addr slot)
+{
+    assert(m_slot_map.find(slot) != m_slot_map.end());
+    m_slot_map.erase(slot);
+}
+
+// looks up a TBE by its slot_id (txnId routing)
+template<class ENTRY>
+inline ENTRY*
+TBETable<ENTRY>::lookupBySlot(Addr slot)
+{
+  auto i = m_slot_map.find(slot);
+  if (i != m_slot_map.end()) return i->second;
   return NULL;
 }
 
