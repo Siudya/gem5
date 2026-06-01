@@ -25,6 +25,7 @@ HNF_POLICY_CODES = {
     "po": 3,
     "ca": 4,
     "delegato": 5,
+    "pa": 6,
 }
 
 TOP_POLICY_MAP = {
@@ -38,6 +39,8 @@ TOP_POLICY_MAP = {
     "delegato": ("unique-near", "bypass", "delegato"),
     "dynaan": ("dynamo", "near", "central"),
     "dynaan-filter": ("dynamo", "filter", "central"),
+    "dynaan-pa": ("dynamo", "near", "pa"),
+    "dynaan-filter-pa": ("dynamo", "filter", "pa"),
 }
 
 
