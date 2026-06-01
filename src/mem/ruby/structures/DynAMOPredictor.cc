@@ -130,7 +130,6 @@ DynAMOPredictor::predictNear(Addr addr, int l1_state_code)
         allocate(addr);
 
         if (global_near) {
-            m_total_amo_fetched++;
             return true;   // NEAR
         } else {
             return false;  // FAR
@@ -143,7 +142,6 @@ DynAMOPredictor::predictNear(Addr addr, int l1_state_code)
     if (entry->reuse_conf > 0) {
         // High confidence: NEAR — reset reuse_bit for new observation
         entry->reuse_bit = false;
-        m_total_amo_fetched++;
         return true;
     }
 
@@ -155,7 +153,6 @@ DynAMOPredictor::predictNear(Addr addr, int l1_state_code)
     } else {
         // SC/SD (present in L1D) → NEAR
         entry->reuse_bit = false;
-        m_total_amo_fetched++;
         return true;
     }
 }
@@ -179,12 +176,30 @@ DynAMOPredictor::notifyEvictOrInval(Addr addr)
     if (entry->reuse_bit) {
         if (entry->reuse_conf < m_counter_max)
             entry->reuse_conf++;
-        m_total_reused++;
     } else {
         if (entry->reuse_conf > 0)
             entry->reuse_conf--;
     }
     entry->reuse_bit = false;
+}
+
+void
+DynAMOPredictor::notifyAmoFetched(Addr addr)
+{
+    if (lookup(addr) == nullptr) {
+        allocate(addr);
+    }
+    ++m_total_amo_fetched;
+}
+
+void
+DynAMOPredictor::notifyAmoResidencyReuse(Addr addr)
+{
+    AMTEntry* entry = lookup(addr);
+    if (entry != nullptr) {
+        entry->reuse_bit = true;
+    }
+    ++m_total_reused;
 }
 
 } // namespace ruby

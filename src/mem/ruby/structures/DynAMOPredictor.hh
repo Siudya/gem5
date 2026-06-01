@@ -85,6 +85,18 @@ class DynAMOPredictor
     void notifyHit(Addr addr);
 
     /**
+     * Notify that an AtomicLoad Unique fetch formed a cache residency.
+     * Updates the global denominator for the first-touch heuristic.
+     */
+    void notifyAmoFetched(Addr addr);
+
+    /**
+     * Notify that an AMO-fetched residency was reused by a local access.
+     * Updates the global numerator and per-line reuse_bit.
+     */
+    void notifyAmoResidencyReuse(Addr addr);
+
+    /**
      * Notify that a tracked cache line was evicted or invalidated from L1D.
      * Updates the reuse confidence counter based on reuse_bit.
      */

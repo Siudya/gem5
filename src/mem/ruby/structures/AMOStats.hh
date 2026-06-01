@@ -55,6 +55,8 @@ class AMOStats
     void incDelegate() { ++stats.delegate; }
     void incMigrate() { ++stats.migrate; }
     void incCentralize() { ++stats.centralize; }
+    void incAmoFetch() { ++stats.amoFetch; }
+    void incLocalReuse() { ++stats.localReuse; }
 
   private:
     struct AMOStatsGroup : public statistics::Group
@@ -72,6 +74,8 @@ class AMOStats
               ADD_STAT(delegate, "AMOs delegated by HN-F"),
               ADD_STAT(migrate, "AMOs migrated by HN-F"),
               ADD_STAT(centralize, "AMOs centralized at HN-F"),
+              ADD_STAT(amoFetch, "Cacheline residencies created by AMO Unique data fetch"),
+              ADD_STAT(localReuse, "AMO-fetched cacheline residencies reused by a later local access"),
               ADD_STAT(placementTotal, "AMOs classified by execution placement",
                        nearL1AMO + nearL2AMO + centralize + migrate +
                        delegate + aanAMO)
@@ -88,6 +92,8 @@ class AMOStats
         statistics::Scalar delegate;
         statistics::Scalar migrate;
         statistics::Scalar centralize;
+        statistics::Scalar amoFetch;
+        statistics::Scalar localReuse;
         statistics::Formula placementTotal;
     } stats;
 };

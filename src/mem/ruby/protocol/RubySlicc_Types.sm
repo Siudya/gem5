@@ -287,6 +287,8 @@ structure(DynAMOPredictor, external = "yes") {
     void notifyHit(Addr);
     // Training: line evicted or invalidated from L1D
     void notifyEvictOrInval(Addr);
+    void notifyAmoFetched(Addr);
+    void notifyAmoResidencyReuse(Addr);
 }
 
 // Delegato Reuse Table: eviction-spill store for AMO reuse tracking.
@@ -329,6 +331,8 @@ structure(AMOStats, external = "yes") {
     void incDelegate();
     void incMigrate();
     void incCentralize();
+    void incAmoFetch();
+    void incLocalReuse();
 }
 
 // AAN bypass/admission table (BAT): filtered AAN rejects the first lookup of a

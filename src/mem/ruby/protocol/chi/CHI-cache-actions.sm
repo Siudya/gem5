@@ -3023,6 +3023,10 @@ action(UpdateDataState_FromReqDataResp, desc="") {
         tbe.dataUnique := true;
         tbe.dataValid := true;
         assert(tbe.dataMaybeDirtyUpstream == false);
+        if (tbe.reqType == CHIRequestType:AtomicLoad) {
+          tbe.markAmoFetchOnFill := true;
+          tbe.skipAmoFetchReuseOnce := true;
+        }
 
       } else if (in_msg.type == CHIDataType:CompData_UD_PD) {
         assert((tbe.dataUnique == false) || delegato_migrate_data);
@@ -3031,6 +3035,10 @@ action(UpdateDataState_FromReqDataResp, desc="") {
         tbe.dataUnique := true;
         tbe.dataValid := true;
         assert(tbe.dataMaybeDirtyUpstream == false);
+        if (tbe.reqType == CHIRequestType:AtomicLoad) {
+          tbe.markAmoFetchOnFill := true;
+          tbe.skipAmoFetchReuseOnce := true;
+        }
 
       } else if (in_msg.type == CHIDataType:CompData_SC) {
         assert(tbe.dataUnique == false);
@@ -4344,6 +4352,19 @@ action(Callback_LoadHit, desc="") {
     DPRINTF(RubySlicc, "Read data %s\n", tbe.dataBlk);
     sequencer.readCallback(tbe.addr, tbe.dataBlk, false);
   }
+  // AMO residency: record first local reuse
+  if (is_valid(cache_entry) && cache_entry.amoFetched &&
+      (cache_entry.amoLocalReused == false)) {
+    if (tbe.skipAmoFetchReuseOnce) {
+      tbe.skipAmoFetchReuseOnce := false;
+    } else {
+      cache_entry.amoLocalReused := true;
+      amoStats.incLocalReuse();
+      if (l1d_amo_policy == 2) {
+        dynamo.notifyAmoResidencyReuse(tbe.addr);
+      }
+    }
+  }
   // DynAMO training: L1D hit sets reuse_bit
   if (l1d_amo_policy == 2) {
     dynamo.notifyHit(tbe.addr);
@@ -4360,6 +4381,19 @@ action(Callback_StoreHit, desc="") {
     sequencer.writeCallback(tbe.addr, tbe.dataBlk, false);
     DPRINTF(RubySlicc, "Write after %s\n", tbe.dataBlk);
     tbe.dataDirty := true;
+  }
+  // AMO residency: record first local reuse
+  if (is_valid(cache_entry) && cache_entry.amoFetched &&
+      (cache_entry.amoLocalReused == false)) {
+    if (tbe.skipAmoFetchReuseOnce) {
+      tbe.skipAmoFetchReuseOnce := false;
+    } else {
+      cache_entry.amoLocalReused := true;
+      amoStats.incLocalReuse();
+      if (l1d_amo_policy == 2) {
+        dynamo.notifyAmoResidencyReuse(tbe.addr);
+      }
+    }
   }
   // DynAMO training: L1D hit sets reuse_bit
   if (l1d_amo_policy == 2) {
@@ -4384,6 +4418,19 @@ action(Callback_AtomicHit, desc="") {
   tbe.dataDirty := true;
   if (tbe.reqType == CHIRequestType:AtomicLoad) {
     amoStats.incNearL1AMO();
+  }
+  // AMO residency: record first local reuse
+  if (is_valid(cache_entry) && cache_entry.amoFetched &&
+      (cache_entry.amoLocalReused == false)) {
+    if (tbe.skipAmoFetchReuseOnce) {
+      tbe.skipAmoFetchReuseOnce := false;
+    } else {
+      cache_entry.amoLocalReused := true;
+      amoStats.incLocalReuse();
+      if (l1d_amo_policy == 2) {
+        dynamo.notifyAmoResidencyReuse(tbe.addr);
+      }
+    }
   }
   // DynAMO training: atomic hit on UC/UD counts as reuse
   if (l1d_amo_policy == 2) {
@@ -4640,6 +4687,8 @@ action(Profile_Eviction, desc="") {
       delegatoRT.notifyLocalUniqueAmo(address);
     }
     cache_entry.amoReuseCount := 0;
+    cache_entry.amoFetched := false;
+    cache_entry.amoLocalReused := false;
   }
 }
 
@@ -4726,6 +4775,16 @@ action(DataArrayWrite, desc="") {
   assert(cache_entry.amoReuseCount <= 3);
   assert(tbe.seedAmoReuseAfterFill == false);
   assert(tbe.pendingAmoReuseInc == 0);
+  // AMO residency: mark cache_entry when AtomicLoad Unique data is installed
+  if (tbe.markAmoFetchOnFill && (tbe.reqType == CHIRequestType:AtomicLoad)) {
+    cache_entry.amoFetched := true;
+    cache_entry.amoLocalReused := false;
+    amoStats.incAmoFetch();
+    if (l1d_amo_policy == 2) {
+      dynamo.notifyAmoFetched(tbe.addr);
+    }
+    tbe.markAmoFetchOnFill := false;
+  }
 }
 
 action(ReadHitPipe, desc="") {

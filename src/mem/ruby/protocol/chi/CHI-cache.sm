@@ -653,6 +653,9 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool amoReusedLocal, default="false", desc="Delegato: L1D local AMO reuse during this residency";
     // Delegato fix_2: L2 live counter — 2-bit saturating, tracks AMO reuse intensity
     int amoReuseCount, default="0", desc="Delegato: L2 AMO reuse counter (saturating 2-bit)";
+    // AMO residency tracking (all policies)
+    bool amoFetched, default="false", desc="AMO residency: line was fetched with Unique data by an AtomicLoad";
+    bool amoLocalReused, default="false", desc="AMO residency: first later local reuse has been counted";
   }
 
   // Directory entry
@@ -877,6 +880,10 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool l1d_ds_dbid, default="false", desc="L1D atomic: DBIDResp received";
     bool l1d_ds_wdat, default="false", desc="L1D atomic: NCBWrData operand sent";
     bool l1d_ds_rdat, default="false", desc="L1D atomic: CompData_I (old value) fully received";
+
+    // AMO residency tracking flags
+    bool markAmoFetchOnFill, default="false", desc="Set CacheEntry amoFetched when this AtomicLoad Unique data is installed";
+    bool skipAmoFetchReuseOnce, default="false", desc="Do not count the initiating AMO as local reuse";
 
     // Tracks requests sent downstream
     CHIRequestType pendReqType, desc="Sent request type";
