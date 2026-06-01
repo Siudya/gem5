@@ -143,7 +143,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   // Orthogonal AMO policies.
   // L1D: 0=near, 1=unique-near, 2=dynamo.
   // AAN: 0=bypass, 1=near, 2=filter.
-  // HN-F: 0=central, 1=migrate, 2=pc, 3=po, 4=ca, 5=delegato.
+  // HN-F: 0=central, 1=migrate, 2=pc, 3=po, 4=ca, 5=delegato, 6=pa(pinned-AAN).
   int l1d_amo_policy := 0;
   int aan_amo_policy := 0;
   int hnf_amo_policy := 0;

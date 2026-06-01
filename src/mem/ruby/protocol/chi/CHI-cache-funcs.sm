@@ -97,6 +97,13 @@ int decideHnfAMOAction(Addr addr, TBE tbe, int dir_case) {
     return delegatoPT.staticAction(0, requestor_id, dir_case, owner_id); // ca
   } else if (hnf_amo_policy == 5) {
     return delegatoPT.decideAction(addr, requestor_id, dir_case, owner_id);
+  } else if (hnf_amo_policy == 6) {
+    // pa (pinned AAN): delegate when AAN holds the line, else centralize.
+    // dir_case==3 means the line is not present at the AAN (DIR_I).
+    if (shouldRouteAddressToAAN(addr) && (dir_case != 3)) {
+      return 1; // delegate
+    }
+    return 0; // central
   }
 
   error("Invalid HN-F AMO policy");
