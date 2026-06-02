@@ -515,6 +515,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     SendReadShared,       out_trans="yes", desc="Send a ReadShared or ReadNotSharedDirty is allow_SD is false";
     SendReadOnce,         out_trans="yes", desc="Send a ReadOnce";
     SendReadNoSnp,        out_trans="yes", desc="Send a SendReadNoSnp";
+    SendReadNoSnp_Central, out_trans="yes", desc="central-AR: Send ReadNoSnp without touching the ExpectedMap (sentinel-held)";
     SendReadNoSnpDMT,     out_trans="yes", desc="Send a SendReadNoSnp using DMT";
     SendReadUnique,       out_trans="yes", desc="Send a ReadUnique";
     SendMakeReadUnique,   out_trans="yes", desc="Send a MakeReadUnique";
@@ -859,6 +860,14 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool ar_ds_rdat, default="false", desc="far-AR: downstream CompData received";
     bool ar_ds_ack,  default="false", desc="far-AR: downstream CompAck sent (or N/A for central)";
     bool ar_loc_amo, default="false", desc="far-AR: local atomic done (migrate only; central N/A)";
+
+    // Flag-driven HNF centralize AtomicReturn path. Reuses ar_us_dbid/wdat/rdat,
+    // ar_ds_req/rdat, ar_loc_amo; ar_ds_dbid/wdat/ack preset true (N/A at HNF).
+    // See CHI-cache-funcs.sm Callback_Central_Atomic.
+    bool central_ar,     default="false", desc="central-AR: this TBE is on the HNF flag-driven centralize path";
+    bool ar_us_snp_snt,  default="false", desc="central-AR: all snoops sent (or N/A)";
+    bool ar_us_snp_rsp,  default="false", desc="central-AR: all snoop responses received (or N/A)";
+    bool ar_us_snp_dat,  default="false", desc="central-AR: dirty snoop data received (or N/A)";
 
     // AAN fill (BAT-admit) flag-driven path: fetch ownership via ReadUnique and
     // execute the atomic locally, overlapping the upstream operand wait with the

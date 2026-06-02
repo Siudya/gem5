@@ -1264,18 +1264,29 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
 
   if (delegato_handled == false) {
     amoStats.incCentralize();
-    if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
-      tbe.actions.push(Event:SendSnpUnique);
-    } else if (tbe.dir_sharers.count() > 0){
-      tbe.actions.push(Event:SendSnpUniqueRetToSrc);
+    tbe.central_ar := true;
+    // Data in HNF cache; no SNF fetch needed.
+    tbe.ar_ds_req  := true;
+    tbe.ar_ds_rdat := true;
+    // N/A flags for HNF central path.
+    tbe.ar_ds_dbid := true;
+    tbe.ar_ds_wdat := true;
+    tbe.ar_ds_ack  := true;
+    if (tbe.dir_sharers.count() == 0) {
+      // No snoops needed; data valid in cache.
+      tbe.ar_us_snp_snt := true;
+      tbe.ar_us_snp_rsp := true;
+      tbe.ar_us_snp_dat := true;
+    } else if (tbe.dataMaybeDirtyUpstream) {
+      // Owner may have dirty data; must wait for SnpRespData.
+      tbe.ar_us_snp_dat := false;
+    } else {
+      // Sharers are clean; no dirty data expected.
+      tbe.ar_us_snp_dat := true;
     }
-    tbe.actions.push(Event:SendDBIDResp_AR);
     tbe.actions.pushNB(Event:WriteFEPipe);
-    tbe.actions.push(Event:SendCompData_AR);
-    tbe.actions.push(Event:DelayAtomic);
-    tbe.actions.push(Event:CheckCacheFill);
-    tbe.actions.push(Event:WriteBEPipe);
-    tbe.actions.push(Event:TagArrayWrite);
+    tbe.expected_req_resp.setExpectedCount(999);
+    Callback_Central_Atomic(tbe);
   }
 }
 
@@ -1341,20 +1352,26 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
 
   if (delegato_handled == false) {
     amoStats.incCentralize();
-    if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
-      tbe.actions.push(Event:SendSnpUnique);
-    } else if (tbe.dir_sharers.count() > 0){
-      tbe.actions.push(Event:SendSnpUniqueRetToSrc);
-    }
-    tbe.actions.push(Event:SendDBIDResp_AR);
-    tbe.actions.pushNB(Event:WriteFEPipe);
-    tbe.actions.push(Event:SendCompData_AR);
-    tbe.actions.push(Event:DelayAtomic);
-    tbe.actions.push(Event:SendWriteNoSnp);
-    tbe.actions.push(Event:WriteBEPipe);
-    tbe.actions.push(Event:SendWUData);
+    tbe.central_ar := true;
     tbe.dataToBeInvalid := true;
-    tbe.actions.pushNB(Event:TagArrayWrite);
+    // Data in HNF cache (dirty); no SNF fetch needed.
+    tbe.ar_ds_req  := true;
+    tbe.ar_ds_rdat := true;
+    tbe.ar_ds_dbid := true;
+    tbe.ar_ds_wdat := true;
+    tbe.ar_ds_ack  := true;
+    if (tbe.dir_sharers.count() == 0) {
+      tbe.ar_us_snp_snt := true;
+      tbe.ar_us_snp_rsp := true;
+      tbe.ar_us_snp_dat := true;
+    } else if (tbe.dataMaybeDirtyUpstream) {
+      tbe.ar_us_snp_dat := false;
+    } else {
+      tbe.ar_us_snp_dat := true;
+    }
+    tbe.actions.pushNB(Event:WriteFEPipe);
+    tbe.expected_req_resp.setExpectedCount(999);
+    Callback_Central_Atomic(tbe);
   }
 }
 
@@ -1651,14 +1668,16 @@ action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
   }
   if (delegato_migrate == false) {
     amoStats.incCentralize();
-    tbe.actions.push(Event:SendReadNoSnp);
-    tbe.actions.pushNB(Event:WriteFEPipe);
-    tbe.actions.push(Event:SendDBIDResp_AR);
-    tbe.actions.push(Event:SendCompData_AR);
-    tbe.actions.push(Event:DelayAtomic);
-    tbe.actions.push(Event:CheckCacheFill);
-    tbe.actions.push(Event:WriteBEPipe);
-    tbe.actions.push(Event:TagArrayWrite);
+    tbe.central_ar := true;
+    // Full miss; no sharers. SNF provides data via ReadNoSnp.
+    tbe.ar_us_snp_snt := true;
+    tbe.ar_us_snp_rsp := true;
+    tbe.ar_us_snp_dat := true;
+    tbe.ar_ds_dbid := true;
+    tbe.ar_ds_wdat := true;
+    tbe.ar_ds_ack  := true;
+    tbe.expected_req_resp.setExpectedCount(999);
+    Callback_Central_Atomic(tbe);
   }
 }
 
@@ -1682,16 +1701,16 @@ action(Initiate_AtomicReturn_Miss, desc="") {
   }
   if (delegato_migrate == false) {
     amoStats.incCentralize();
-    tbe.actions.push(Event:SendReadNoSnp);
-    tbe.actions.pushNB(Event:WriteFEPipe);
-    tbe.actions.push(Event:SendDBIDResp_AR);
-    tbe.actions.push(Event:SendCompData_AR);
-    tbe.actions.push(Event:DelayAtomic);
-    tbe.actions.push(Event:WriteBEPipe);
-    tbe.actions.push(Event:SendWriteNoSnp);
-    tbe.actions.push(Event:SendWUData);
+    tbe.central_ar := true;
     tbe.dataToBeInvalid := true;
-    tbe.actions.pushNB(Event:TagArrayWrite);
+    tbe.ar_us_snp_snt := true;
+    tbe.ar_us_snp_rsp := true;
+    tbe.ar_us_snp_dat := true;
+    tbe.ar_ds_dbid := true;
+    tbe.ar_ds_wdat := true;
+    tbe.ar_ds_ack  := true;
+    tbe.expected_req_resp.setExpectedCount(999);
+    Callback_Central_Atomic(tbe);
   }
 }
 
@@ -2043,6 +2062,24 @@ action(Send_ReadNoSnp, desc="") {
   tbe.dataBlkValid.clear();
   outgoingTransactionStart(address, curTransitionEvent());
 
+  enqueue(reqOutPort, CHIRequestMsg, request_latency) {
+    prepareRequest(tbe, CHIRequestType:ReadNoSnp, out_msg);
+    out_msg.Destination.add(mapAddressToDownstreamMachine(tbe.addr));
+    out_msg.dataToFwdRequestor := false;
+    allowRequestRetry(tbe, out_msg);
+  }
+}
+
+action(Send_ReadNoSnp_Central, desc="") {
+  // central-AR: fetch old value from SNF without disturbing the ExpectedMap.
+  // The sentinel (999) set in Initiate holds the TBE busy; the CompData_I beat
+  // is tracked by the ar_ds_rdat flag in Receive_ReqDataResp, and the
+  // completion gate releases the sentinel. Do NOT clearExpectedReqResp or
+  // setExpectedCount here (that is what Send_ReadNoSnp does and it would drop
+  // the sentinel, finalizing the TBE early -> deadlock).
+  assert(is_HN);
+  assert(tbe.central_ar);
+  outgoingTransactionStart(address, curTransitionEvent());
   enqueue(reqOutPort, CHIRequestMsg, request_latency) {
     prepareRequest(tbe, CHIRequestType:ReadNoSnp, out_msg);
     out_msg.Destination.add(mapAddressToDownstreamMachine(tbe.addr));
@@ -2742,6 +2779,30 @@ action(Receive_ReqDataResp, desc="") {
         }
       }
     }
+  } else if (tbe.central_ar) {
+    // HNF central AtomicReturn flag path. Two streams:
+    //   NCBWrData — upstream operand from requester (payload unused).
+    //   CompData_I — downstream old value from SNF.
+    peek(datInPort, CHIDataMsg) {
+      if (in_msg.type == CHIDataType:NCBWrData) {
+        tbe.ar_us_wdat := true;
+        Callback_Central_Atomic(tbe);
+      } else {
+        // CompData_I from SNF: accumulate old value.
+        if (tbe.dataBlkValid.isFull()) {
+          tbe.dataBlkValid.clear();
+        }
+        tbe.oldDataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+        tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+        assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
+        tbe.dataBlkValid.orMask(in_msg.bitMask);
+        if (tbe.dataBlkValid.isFull()) {
+          tbe.dataValid := true;
+          tbe.ar_ds_rdat := true;
+          Callback_Central_Atomic(tbe);
+        }
+      }
+    }
   } else if (tbe.l1d_ar_fwd) {
     // L1D-direct atomic flag path. Only receives CompData_I (old value) from
     // the completer (L2/AAN/HNF). NCBWrData is outgoing only (L1D sends it).
@@ -2804,9 +2865,10 @@ action(Receive_ReqDataResp, desc="") {
 
 action(Receive_RespSepDataFromCompData, desc="") {
   assert(is_valid(tbe));
-  // Flag-driven paths (L2 far-AR / AAN fill) track data via flags in
-  // Receive_ReqDataResp, not through the ExpectedMap RespSepData accounting.
-  if ((tbe.ar_fwd == false) && (tbe.aan_fwd == false) && (tbe.l1d_ar_fwd == false)) {
+  // Flag-driven paths (L2 far-AR / AAN fill / HNF central) track data via flags
+  // in Receive_ReqDataResp, not through the ExpectedMap RespSepData accounting.
+  if ((tbe.ar_fwd == false) && (tbe.aan_fwd == false) &&
+      (tbe.l1d_ar_fwd == false) && (tbe.central_ar == false)) {
     assert(tbe.expected_req_resp.hasExpected());
 
     // check if a previous CompData msg already counted as a RespSepData
@@ -2870,6 +2932,13 @@ action(Receive_SnpDataResp, desc="") {
       assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
       tbe.dataBlkValid.orMask(in_msg.bitMask);
     }
+  }
+  // central-AR: all snoop responses (including this data beat) now received.
+  if (tbe.central_ar && (tbe.expected_snp_resp.hasExpected() == false)) {
+    tbe.ar_us_snp_rsp := true;
+    tbe.ar_us_snp_dat := true;  // dirty data now in tbe.dataBlk
+    tbe.dataValid := true;
+    Callback_Central_Atomic(tbe);
   }
 }
 
@@ -3357,6 +3426,17 @@ action(Receive_SnpResp, desc="") {
       error("Received unexpected message");
     }
     assert(in_msg.stale == tbe.is_stale);
+  }
+  // central-AR: all snoop responses received. On snoop-sending paths HNF
+  // already holds the old value in cache (copyCacheAndDir set dataValid); a
+  // plain SnpResp_I returns no data but the cached value is still valid, so the
+  // old-value edge (ar_us_snp_dat) is satisfied once snoops drain — set it here
+  // too, otherwise a clean SnpResp_I would leave ar_us_snp_dat false forever
+  // (CompData_AR / DoAtomicLocal gate on it) and the TBE would hang.
+  if (tbe.central_ar && (tbe.expected_snp_resp.hasExpected() == false)) {
+    tbe.ar_us_snp_rsp := true;
+    tbe.ar_us_snp_dat := true;
+    Callback_Central_Atomic(tbe);
   }
 }
 
@@ -4014,14 +4094,30 @@ action(Prepare_AtomicReturn_Local, desc="") {
 
 action(Send_CompData_AR, desc="") {
   assert(is_valid(tbe));
-  assert(tbe.dataValid);
 
   tbe.snd_msgType := CHIDataType:CompData_I;
   tbe.dataMaybeDirtyUpstream := false;
   tbe.requestorToBeExclusiveOwner := false;
   tbe.requestorToBeOwner := false;
   tbe.snd_destination := tbe.requestor;
-  setupPendingSend(tbe);
+  if (tbe.central_ar) {
+    // HNF central relay: oldDataBlk snapshotted in Callback_Central_Atomic under
+    // (ar_us_snp_dat && ar_ds_rdat). A concurrent hazard snoop may invalidate the
+    // live line afterwards (legal); the old value is locked in oldDataBlk.
+    assert(tbe.ar_ds_rdat && tbe.ar_us_snp_dat);
+    setupPendingSend_AR(tbe);
+  } else if (tbe.ar_fwd) {
+    // L2 forward relay: oldDataBlk captured when CompData arrived (ar_ds_rdat).
+    assert(tbe.ar_ds_rdat);
+    setupPendingSend_AR(tbe);
+  } else if (tbe.l1d_ar_fwd) {
+    // L1D direct relay: oldDataBlk captured when CompData_I arrived (l1d_ds_rdat).
+    assert(tbe.l1d_ds_rdat);
+    setupPendingSend_AR(tbe);
+  } else {
+    assert(tbe.dataValid);
+    setupPendingSend(tbe);
+  }
   printTBEState(tbe);
 
 }
@@ -4709,6 +4805,10 @@ action(Profile_OutgoingEnd_DataResp, desc="") {
     }
   } else if (tbe.l1d_ar_fwd) {
     if (tbe.l1d_ds_rdat) {
+      outgoingTransactionEnd(address, tbe.rcvdRetryAck);
+    }
+  } else if (tbe.central_ar) {
+    if (tbe.ar_ds_rdat) {
       outgoingTransactionEnd(address, tbe.rcvdRetryAck);
     }
   } else if (tbe.expected_req_resp.hasReceivedData()) {

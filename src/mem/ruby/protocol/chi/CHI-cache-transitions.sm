@@ -1326,6 +1326,13 @@ transition(BUSY_BLKD, SendReadNoSnp, BUSY_INTR) {DestinationAvailable} {
   ProcessNextState_ClearPending;
 }
 
+// central-AR: ReadNoSnp that keeps the ExpectedMap sentinel intact.
+transition({BUSY_BLKD,BUSY_INTR}, SendReadNoSnp_Central, BUSY_INTR) {DestinationAvailable} {
+  Pop_TriggerQueue;
+  Send_ReadNoSnp_Central;
+  ProcessNextState_ClearPending;
+}
+
 transition(BUSY_BLKD, SendReadNoSnpDMT, BUSY_INTR) {DestinationAvailable} {
   Pop_TriggerQueue;
   Send_ReadNoSnpDMT;
