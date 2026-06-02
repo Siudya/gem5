@@ -591,56 +591,52 @@ void Callback_Central_Atomic(TBE tbe) {
   }
 }
 
-// Flag-driven AAN fill (BAT-admit): fetch ownership via ReadUnique and execute
-// the atomic locally, overlapping the upstream operand wait (NCBWrData) with the
-// downstream ReadUnique data wait (CompData_UC/UD_PD). Called from every input
-// edge after it sets its flag. expected_req_resp is held at a sentinel (set in
-// Initiate_AtomicReturn_Forward) and released by the completion gate.
+// Unified flag-driven AAN AtomicReturn. Covers:
+//   hit (dataValid && dataUnique): AAN is the completer, executes locally, stays
+//       BUSY_BLKD (ar_ds_req preset -> no SendReadUnique -> no BUSY_INTR).
+//   fill (BAT admits): fetch ownership via ReadUnique (-> BUSY_INTR), overlap
+//       operand wait with data wait, execute locally on arrival.
+// Bypass paths (transparent/BAT-rejects) remain outside this callback.
+// AAN is a leaf cache with no upstream private sharers — no snoop edges.
 //
-// INVARIANT: the completion gate MUST be the last clause (same reason as
-// Callback_L2_AtomicReturn).
-void Callback_AAN_Fill_Forward(TBE tbe) {
+// INVARIANT: the completion gate MUST be the last clause.
+void Callback_AAN_AtomicReturn(TBE tbe) {
   assert(is_valid(tbe));
-  assert(tbe.aan_fwd);
+  assert(tbe.ar_fwd);
 
-  // Downstream: fetch ownership via ReadUnique.
-  if (tbe.aan_ds_req == false) {
-    tbe.actions.pushNB(Event:SendReadUnique);
-    tbe.aan_ds_req := true;
-  }
-  // Upstream: ack the requester early (does not wait for the downstream data),
-  // so its operand NCBWrData starts coming back in parallel with ReadUnique.
-  // Safe: the L1D now uses l1d_ar_fwd (BUSY_INTR + slot routing).
-  if (tbe.aan_us_dbid == false) {
+  // Upstream: ack the requester with DBIDResp (early, overlaps downstream).
+  if (tbe.ar_us_dbid == false) {
     tbe.actions.pushNB(Event:SendDBIDResp_AR_Fwd);
-    tbe.aan_us_dbid := true;
+    tbe.ar_us_dbid := true;
   }
-  // Downstream: once the ReadUnique data is in, ack the HN-F (CompAck) to
-  // complete the ReadUnique.
-  if ((tbe.aan_ds_ack == false) && tbe.aan_ds_rdat) {
+  // Downstream: fetch ownership via ReadUnique (fill only; hit presets ar_ds_req).
+  if (tbe.ar_ds_req == false) {
+    tbe.actions.pushNB(Event:SendReadUnique);
+    tbe.ar_ds_req := true;
+  }
+  // Downstream: CompAck after ReadUnique data (fill only; hit presets ar_ds_ack).
+  if ((tbe.ar_ds_ack == false) && tbe.ar_ds_rdat) {
     tbe.actions.pushNB(Event:SendCompAck);
-    tbe.aan_ds_ack := true;
+    tbe.ar_ds_ack := true;
   }
-  // Upstream: once the data is in, return CompData_I (the pre-atomic old value,
-  // snapshotted into oldDataBlk when aan_ds_rdat was set).
-  if ((tbe.aan_us_rdat == false) && tbe.aan_ds_rdat) {
+  // Upstream: return old value (CompData_I = oldDataBlk) once data is ready.
+  if ((tbe.ar_us_rdat == false) && tbe.ar_ds_rdat) {
+    tbe.oldDataBlk := tbe.dataBlk;
     tbe.actions.pushNB(Event:SendCompData_AR);
-    tbe.aan_us_rdat := true;
+    tbe.ar_us_rdat := true;
   }
-  // Local execution: needs the fetched data (aan_ds_rdat) and the operand ready
-  // (aan_us_wdat). Independent of whether the old value has been returned yet.
-  if ((tbe.aan_loc_amo == false) && tbe.aan_ds_rdat && tbe.aan_us_wdat) {
+  // Local execution: needs fetched data + operand.
+  if ((tbe.ar_loc_amo == false) && tbe.ar_ds_rdat && tbe.ar_us_wdat) {
     tbe.actions.push(Event:DelayAtomic);
     tbe.actions.push(Event:DoAtomicLocal);
     tbe.actions.push(Event:CheckCacheFill);
     tbe.actions.push(Event:WriteBEPipe);
     tbe.actions.push(Event:TagArrayWrite);
-    tbe.aan_loc_amo := true;
+    tbe.ar_loc_amo := true;
   }
-  // Completion gate (MUST stay last): all edges done -> release the sentinel.
-  if (tbe.aan_ds_req && tbe.aan_ds_rdat && tbe.aan_ds_ack &&
-      tbe.aan_us_dbid && tbe.aan_us_wdat && tbe.aan_us_rdat &&
-      tbe.aan_loc_amo) {
+  // Completion gate (MUST BE LAST). No snoop edges at AAN (leaf cache).
+  if (tbe.ar_us_dbid && tbe.ar_us_wdat && tbe.ar_us_rdat &&
+      tbe.ar_ds_req && tbe.ar_ds_rdat && tbe.ar_ds_ack && tbe.ar_loc_amo) {
     tbe.expected_req_resp.setExpectedCount(tbe.expected_req_resp.received());
   }
 }

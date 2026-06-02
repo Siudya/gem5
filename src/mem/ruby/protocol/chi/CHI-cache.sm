@@ -871,17 +871,6 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     // directory's sharers/owner). See CHI-cache-funcs.sm Callback_Central_Atomic.
     bool central_ar, default="false", desc="AR: this TBE is on the HNF flag-driven centralize path";
 
-    // AAN fill (BAT-admit) flag-driven path: fetch ownership via ReadUnique and
-    // execute the atomic locally, overlapping the upstream operand wait with the
-    // downstream ReadUnique data wait. See Callback_AAN_Fill_Forward.
-    bool aan_fwd, default="false", desc="AAN fill: this TBE is on the flag-driven fill path";
-    bool aan_ds_req, default="false", desc="AAN fill: downstream ReadUnique sent";
-    bool aan_ds_rdat, default="false", desc="AAN fill: downstream CompData_UC/UD_PD fully received";
-    bool aan_ds_ack, default="false", desc="AAN fill: CompAck sent to HN-F for the ReadUnique";
-    bool aan_us_dbid, default="false", desc="AAN fill: upstream DBIDResp sent to requester (early)";
-    bool aan_us_wdat, default="false", desc="AAN fill: upstream NCBWrData received (operand ready)";
-    bool aan_us_rdat, default="false", desc="AAN fill: upstream CompData_I (old value) sent to requester";
-    bool aan_loc_amo, default="false", desc="AAN fill: local atomic executed + written back";
 
     // L1D-direct atomic flag-driven path: allows DBIDResp to arrive without
     // blocking snoops (BUSY_INTR) and CompData to route via slot. Replaces the
