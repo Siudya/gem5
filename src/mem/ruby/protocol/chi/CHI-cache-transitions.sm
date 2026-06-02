@@ -1475,12 +1475,6 @@ transition({BUSY_BLKD,BUSY_INTR}, SendCompData_AR) {
   ProcessNextState_ClearPending;
 }
 
-transition(BUSY_BLKD, PrepareAtomicReturnLocal) {
-  Pop_TriggerQueue;
-  Prepare_AtomicReturn_Local;
-  ProcessNextState_ClearPending;
-}
-
 transition(BUSY_BLKD, SendCompDBIDRespStale) {
   Pop_TriggerQueue;
   Send_CompDBIDResp_Stale;

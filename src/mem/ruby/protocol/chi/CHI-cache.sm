@@ -555,7 +555,6 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     SendARData_Fwd,        desc="far-AR: send NCBWrData operand downstream (no ExpectedMap change)";
     // Atomic handling at the completer
     SendDBIDResp_AR,       desc="Ack AR with DBIDResp and set expected data";
-    PrepareAtomicReturnLocal, desc="Prepare old data for a locally executed AtomicReturn";
     SendCompData_AR,       desc="Ack AR completion";
     SendCompDBIDResp_ANR,  desc="Ack ANR with CompDBIDResp and set expected data";
     SendDBIDResp_ANR,      desc="Ack ANR with DBIDResp and set expected data";
@@ -847,27 +846,30 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool aan_fill_read_unique, default="false", desc="AAN fill: downstream ownership is fetched with ReadUnique";
     bool is_delegato_migrate, default="false", desc="Delegato: requester received unique data for local AtomicReturn";
 
-    // Flag-driven far AtomicReturn forwarding at L2 (is_L2). One flag per
-    // half-transaction edge; Callback_AtomicReturn_Forward advances on any of
-    // them. See CHI-cache-actions.sm Callback_AtomicReturn_Forward.
-    bool ar_fwd, default="false", desc="far-AR: this TBE is on the L2 flag-driven forward path";
-    bool ar_us_dbid, default="false", desc="far-AR: upstream DBIDResp sent to L1D";
-    bool ar_us_wdat, default="false", desc="far-AR: upstream NCBWrData (operand) received from L1D";
-    bool ar_us_rdat, default="false", desc="far-AR: upstream CompData_I (old value) sent to L1D";
-    bool ar_ds_req,  default="false", desc="far-AR: downstream AtomicReturn sent";
-    bool ar_ds_dbid, default="false", desc="far-AR: downstream DBIDResp received (or N/A for migrate)";
-    bool ar_ds_wdat, default="false", desc="far-AR: downstream NCBWrData sent (or N/A for migrate)";
-    bool ar_ds_rdat, default="false", desc="far-AR: downstream CompData received";
-    bool ar_ds_ack,  default="false", desc="far-AR: downstream CompAck sent (or N/A for central)";
-    bool ar_loc_amo, default="false", desc="far-AR: local atomic done (migrate only; central N/A)";
+    // Flag-driven AtomicReturn edges. One flag per half-transaction edge; a
+    // path's Callback (Callback_L2_AtomicReturn at L2, Callback_Central_Atomic
+    // at HNF, and future requesters) advances on any edge. The flags are
+    // part-agnostic: "upstream" = toward the requester, "downstream" = toward
+    // the completer. Per-path differences are encoded by the initial preset of
+    // these flags; a preset-true flag means "this edge is N/A on this path".
+    // expected_req_resp is held at a sentinel and released by the completion gate.
+    bool ar_fwd, default="false", desc="AR: this TBE is on the L2 flag-driven path";
+    bool ar_us_dbid, default="false", desc="AR upstream: DBIDResp sent to requester";
+    bool ar_us_wdat, default="false", desc="AR upstream: operand (NCBWrData) received from requester";
+    bool ar_us_rdat, default="false", desc="AR upstream: old value (CompData_I) sent to requester";
+    bool ar_us_snp_snt, default="false", desc="AR upstream: all snoops sent (preset true if none needed)";
+    bool ar_us_snp_rsp, default="false", desc="AR upstream: all snoop responses received (preset true if none needed)";
+    bool ar_us_snp_dat, default="false", desc="AR upstream: snoop data (old value) received (preset true if not supplied by snoop)";
+    bool ar_ds_req,  default="false", desc="AR downstream: request sent to completer (preset true if no downstream)";
+    bool ar_ds_dbid, default="false", desc="AR downstream: DBIDResp received (preset true if no downstream handshake)";
+    bool ar_ds_wdat, default="false", desc="AR downstream: operand (NCBWrData) sent to completer (preset true if not sent)";
+    bool ar_ds_rdat, default="false", desc="AR downstream: data received from completer (preset true if local data)";
+    bool ar_ds_ack,  default="false", desc="AR downstream: CompAck sent to completer (preset true if not needed)";
+    bool ar_loc_amo, default="false", desc="AR local: atomic executed locally (preset true if executed remotely)";
 
-    // Flag-driven HNF centralize AtomicReturn path. Reuses ar_us_dbid/wdat/rdat,
-    // ar_ds_req/rdat, ar_loc_amo; ar_ds_dbid/wdat/ack preset true (N/A at HNF).
-    // See CHI-cache-funcs.sm Callback_Central_Atomic.
-    bool central_ar,     default="false", desc="central-AR: this TBE is on the HNF flag-driven centralize path";
-    bool ar_us_snp_snt,  default="false", desc="central-AR: all snoops sent (or N/A)";
-    bool ar_us_snp_rsp,  default="false", desc="central-AR: all snoop responses received (or N/A)";
-    bool ar_us_snp_dat,  default="false", desc="central-AR: dirty snoop data received (or N/A)";
+    // HNF centralize AtomicReturn: reuses the ar_* edges above (snoops go to the
+    // directory's sharers/owner). See CHI-cache-funcs.sm Callback_Central_Atomic.
+    bool central_ar, default="false", desc="AR: this TBE is on the HNF flag-driven centralize path";
 
     // AAN fill (BAT-admit) flag-driven path: fetch ownership via ReadUnique and
     // execute the atomic locally, overlapping the upstream operand wait with the

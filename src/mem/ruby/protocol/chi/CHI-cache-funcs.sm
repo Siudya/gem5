@@ -449,65 +449,68 @@ void clearExpectedReqResp(TBE tbe) {
   tbe.expected_req_resp.clear(blockSize / data_channel_size);
 }
 
-// Flag-driven far AtomicReturn forwarding at the L2 (is_L2). Called from every
-// input edge after that edge sets its flag. Each guarded clause fires its
-// outgoing action exactly once (its done-flag gates re-entry). The flags
-// encode two half-transactions: upstream (toward L1D) and downstream (toward
-// HNF/SNF). central path = downstream returns DBIDResp then CompData_I (HN
-// executes the atomic); migrate path = downstream returns CompData_UC/UD_PD
-// (this L2 executes the atomic locally and writes back).
-// expected_req_resp is held at a large sentinel for the whole sequence and
-// released (received := sentinel via setExpectedCount(received)) only when all
-// flags are set, so processNextState cannot finalize the TBE early.
+// Unified flag-driven L2 AtomicReturn (is_L2). Subsumes every non-AAN L2 path;
+// the path is encoded only by the initial flag preset (Initiate_AtomicReturn_
+// Forward), this function is path-agnostic:
+//   near (UD/UC, UC_RSC/UD_RSC/UD_RSD, UC_RU/UD_RU/RU): L2 is the completer,
+//        executes locally, stays BUSY_BLKD (ar_ds_req preset -> no
+//        SendAtomicReturn -> no BUSY_INTR -> same-addr snoops blocked).
+//   far-central (-> HN, CompData_I): HN runs the atomic, L2 relays old value.
+//   far-migrate (-> HN, CompData_UC/UD_PD): ownership moves here, L2 executes.
+// far pushes SendAtomicReturn -> BUSY_INTR (snoopable, avoids cross-node
+// deadlock). expected_req_resp held at a sentinel, released by the completion gate.
 //
-// INVARIANT: the completion gate MUST be the last clause in this function.
-// There is no event after the local atomic completes, so the gate is only ever
-// re-evaluated when an input edge arrives. The last-arriving edge can set
-// several flags in a single call (e.g. migrate CompData sets ar_ds_rdat ->
-// ar_us_rdat -> ar_ds_ack -> ar_loc_amo all at once); the gate must run AFTER
-// those flag-setting clauses in the same call, or it would miss the moment all
-// flags become true and the TBE would hang forever.
-void Callback_AtomicReturn_Forward(TBE tbe) {
+// INVARIANT: the completion gate MUST be the last clause — the last-arriving
+// edge can set several flags in one call and the gate must see them together.
+void Callback_L2_AtomicReturn(TBE tbe) {
   assert(is_valid(tbe));
   assert(tbe.ar_fwd);
 
-  // Downstream: forward the AtomicReturn request (carries atomic_op).
-  if (tbe.ar_ds_req == false) {
-    tbe.actions.pushNB(Event:SendAtomicReturn);
-    tbe.ar_ds_req := true;
-  }
-  // Upstream: ack the L1D with a DBIDResp so it sends us the operand NCBWrData.
-  // The L1D now uses flag-driven slot routing (l1d_ar_fwd): its DBIDResp routes
-  // to DBIDResp_AR (BUSY_INTR, snoopable) and its CompData routes via slot.
-  // No need to defer past the downstream DBID.
+  // Upstream: ack the requester with DBIDResp (flag-driven, no ExpectNCBWrData_A;
+  // the operand edge is tracked by ar_us_wdat).
   if (tbe.ar_us_dbid == false) {
     tbe.actions.pushNB(Event:SendDBIDResp_AR_Fwd);
     tbe.ar_us_dbid := true;
   }
-  // Downstream: once the HNF granted a DBID and the upstream operand arrived,
-  // send the (placeholder) NCBWrData to close the write-data handshake.
-  // Skipped on the migrate path (ar_ds_wdat preset true on CompData_UC/UD_PD).
+  // Upstream: snoop the holders. RetToSrc fetches the old value (exclusive owner
+  // holds it); plain SnpUnique only invalidates clean sharers (L2 holds data).
+  if (tbe.ar_us_snp_snt == false) {
+    if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
+      tbe.actions.pushNB(Event:SendSnpUniqueRetToSrc);
+    } else {
+      tbe.actions.pushNB(Event:SendSnpUnique);
+    }
+    tbe.ar_us_snp_snt := true;
+  }
+  // Downstream: forward the AtomicReturn (carries atomic_op) to the completer.
+  if (tbe.ar_ds_req == false) {
+    tbe.actions.pushNB(Event:SendAtomicReturn);
+    tbe.ar_ds_req := true;
+  }
+  // Downstream: after the completer's DBID and the upstream operand, close the
+  // write-data handshake with NCBWrData (central only).
   if ((tbe.ar_ds_wdat == false) && tbe.ar_ds_dbid && tbe.ar_us_wdat) {
     tbe.actions.pushNB(Event:SendARData_Fwd);
     tbe.ar_ds_wdat := true;
   }
-  // Upstream: once the downstream data (old value) arrived, return CompData_I.
-  if ((tbe.ar_us_rdat == false) && tbe.ar_ds_rdat) {
+  // Upstream: return the old value (CompData_I = oldDataBlk) once it is ready.
+  // Snapshot now: dataBlk holds the pre-atomic value on every path and the
+  // local atomic has not run yet in this call.
+  if ((tbe.ar_us_rdat == false) && tbe.ar_us_snp_dat && tbe.ar_ds_rdat) {
+    tbe.oldDataBlk := tbe.dataBlk;
     tbe.actions.pushNB(Event:SendCompData_AR);
     tbe.ar_us_rdat := true;
   }
-  // Downstream: on the migrate path, ack the HNF with CompAck.
-  // Preset true on the central path (CompData_I), so this is migrate-only.
+  // Downstream: CompAck to the completer (migrate only).
   if ((tbe.ar_ds_ack == false) && tbe.ar_ds_rdat) {
     tbe.actions.pushNB(Event:SendCompAck);
     tbe.ar_ds_ack := true;
   }
-  // Migrate local execution: data migrated here, execute the atomic and write
-  // back. Preset true on the central path (remote execution), so migrate-only.
-  // Requires the old value already returned upstream (ar_us_rdat) and CompAck
-  // sent (ar_ds_ack) so ordering toward both neighbors is settled first.
-  if ((tbe.ar_loc_amo == false) && tbe.ar_us_rdat && tbe.ar_ds_rdat &&
-      tbe.ar_ds_ack) {
+  // Local execution (near + migrate). Needs operand + old value sent + all snoop
+  // data in + snoop invalidate drained (ar_us_snp_rsp: don't run the atomic while
+  // an upstream clean copy still spans it) + downstream data + CompAck settled.
+  if ((tbe.ar_loc_amo == false) && tbe.ar_us_wdat && tbe.ar_us_rdat &&
+      tbe.ar_us_snp_rsp && tbe.ar_us_snp_dat && tbe.ar_ds_rdat && tbe.ar_ds_ack) {
     tbe.actions.push(Event:DelayAtomic);
     tbe.actions.push(Event:DoAtomicLocal);
     tbe.actions.push(Event:CheckCacheFill);
@@ -515,29 +518,21 @@ void Callback_AtomicReturn_Forward(TBE tbe) {
     tbe.actions.push(Event:TagArrayWrite);
     tbe.ar_loc_amo := true;
   }
-  // Completion: all edges done — release the sentinel so the TBE can finalize.
-  // MUST stay last (see INVARIANT in the header): the last-arriving edge sets
-  // its remaining flags in the clauses above, and this gate must see them in
-  // the same call. Do not add flag-setting clauses below this point.
+  // Completion gate (MUST BE LAST): release the sentinel when all edges done.
   if (tbe.ar_us_dbid && tbe.ar_us_wdat && tbe.ar_us_rdat &&
+      tbe.ar_us_snp_snt && tbe.ar_us_snp_rsp && tbe.ar_us_snp_dat &&
       tbe.ar_ds_req && tbe.ar_ds_dbid && tbe.ar_ds_wdat &&
       tbe.ar_ds_rdat && tbe.ar_ds_ack && tbe.ar_loc_amo) {
     tbe.expected_req_resp.setExpectedCount(tbe.expected_req_resp.received());
   }
 }
 
-// Flag-driven HNF centralize AtomicReturn. Reuses the ar_us/ar_ds flags from
-// Callback_AtomicReturn_Forward; ar_ds_dbid/wdat/ack are preset true (N/A at
-// HNF). Three new snoop flags track the snoop phase:
-//   ar_us_snp_snt  — all snoops sent (or preset true when no snoops needed)
-//   ar_us_snp_rsp  — all snoop responses received (set when expected_snp_resp
-//                    clears; preset true when no snoops needed)
-//   ar_us_snp_dat  — dirty snoop data received (preset true when owner cannot
-//                    have dirty data, i.e. SC sharers or no sharers)
-// expected_req_resp is held at sentinel 999 and released by the completion gate.
+// Flag-driven HNF centralize AtomicReturn. Reuses the shared ar_* edges; the HNF
+// snoops the directory's sharers/owner (ar_us_snp_*) and fetches from the SNF via
+// ReadNoSnp (ar_ds_*). ar_ds_dbid/wdat/ack are preset true (no DBID/operand/ack
+// handshake at the HNF). expected_req_resp held at a sentinel, released by the gate.
 //
-// INVARIANT: the completion gate MUST be the last clause (same reason as
-// Callback_AtomicReturn_Forward).
+// INVARIANT: the completion gate MUST be the last clause (same as Callback_L2_AtomicReturn).
 void Callback_Central_Atomic(TBE tbe) {
   assert(is_valid(tbe));
   assert(tbe.central_ar);
@@ -603,7 +598,7 @@ void Callback_Central_Atomic(TBE tbe) {
 // Initiate_AtomicReturn_Forward) and released by the completion gate.
 //
 // INVARIANT: the completion gate MUST be the last clause (same reason as
-// Callback_AtomicReturn_Forward).
+// Callback_L2_AtomicReturn).
 void Callback_AAN_Fill_Forward(TBE tbe) {
   assert(is_valid(tbe));
   assert(tbe.aan_fwd);

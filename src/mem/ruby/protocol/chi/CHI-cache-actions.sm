@@ -1530,76 +1530,71 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       tbe.actions.push(Event:SendAtomicReturn_AANTransparentBypass);
     }
   } else {
-    // Non-AAN (L2)
+    // Non-AAN (L2). Unified flag-driven path: classify into near (L2 is the
+    // completer, executes locally, stays BUSY_BLKD) vs far (forward to HN,
+    // BUSY_INTR). Per-path differences are encoded purely by the initial flag
+    // preset below; Callback_L2_AtomicReturn is path-agnostic.
     if (is_valid(cache_entry) && (cache_entry.amoReuseCount < 3)) {
       cache_entry.amoReuseCount := cache_entry.amoReuseCount + 1;
     }
+    assert(is_L2);
+    tbe.ar_fwd := true;
+    clearExpectedReqResp(tbe);
+    tbe.expected_req_resp.setExpectedCount(999);
 
     if (tbe.dataValid && tbe.dataUnique && !tbe.dataMaybeDirtyUpstream &&
         tbe.dir_sharers.isEmpty()) {
-      // UD/UC with no upstream holders: execute locally
+      // 2.1 UD/UC, no upstream holders: near, no snoop, data in cache.
       amoStats.incNearL2AMO();
-      tbe.actions.push(Event:DataArrayRead);
-      tbe.actions.push(Event:SendDBIDResp_AR);
-      tbe.actions.push(Event:PrepareAtomicReturnLocal);
-      tbe.actions.push(Event:SendCompData_AR);
-      tbe.actions.push(Event:DelayAtomic);
-      tbe.actions.push(Event:DoAtomicLocal);
-      tbe.actions.push(Event:CheckCacheFill);
-      tbe.actions.push(Event:WriteBEPipe);
-      tbe.actions.push(Event:TagArrayWrite);
       tbe.dataToBeInvalid := false;
       tbe.doCacheFill := true;
+      tbe.ar_us_snp_snt := true;  // no snoop
+      tbe.ar_us_snp_rsp := true;
+      tbe.ar_us_snp_dat := true;
+      tbe.ar_ds_req  := true;     // no far path -> stay BUSY_BLKD
+      tbe.ar_ds_dbid := true;
+      tbe.ar_ds_wdat := true;
+      tbe.ar_ds_rdat := true;
+      tbe.ar_ds_ack  := true;
     } else if (tbe.dataValid && tbe.dataUnique && !tbe.dir_ownerIsExcl &&
                !tbe.dir_sharers.isEmpty()) {
-      // UC_RSC / UD_RSC / UD_RSD: L2 has Unique data, upstream has SC/SD.
-      // Invalidate upstream, then execute locally.
+      // 2.2 UC_RSC/UD_RSC/UD_RSD: near, L2 holds Unique data, upstream SC/SD.
+      // Snoop only invalidates (no dirty data returns), data in cache.
       amoStats.incNearL2AMO();
-      tbe.actions.push(Event:SendSnpUnique);
-      tbe.actions.push(Event:DataArrayRead);
-      tbe.actions.push(Event:SendDBIDResp_AR);
-      tbe.actions.push(Event:PrepareAtomicReturnLocal);
-      tbe.actions.push(Event:SendCompData_AR);
-      tbe.actions.push(Event:DelayAtomic);
-      tbe.actions.push(Event:DoAtomicLocal);
-      tbe.actions.push(Event:CheckCacheFill);
-      tbe.actions.push(Event:WriteBEPipe);
-      tbe.actions.push(Event:TagArrayWrite);
       tbe.dataToBeInvalid := false;
       tbe.doCacheFill := true;
+      tbe.ar_us_snp_dat := true;  // snoop returns no data we need
+      tbe.ar_ds_req  := true;     // no far path -> stay BUSY_BLKD
+      tbe.ar_ds_dbid := true;
+      tbe.ar_ds_wdat := true;
+      tbe.ar_ds_rdat := true;
+      tbe.ar_ds_ack  := true;
     } else if (!tbe.dataValid && tbe.dataUnique && tbe.dataMaybeDirtyUpstream &&
                tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
-      // UC_RU / UD_RU / RU: data at upstream L1D with exclusive ownership.
-      // Snoop L1D to get data back, then execute locally.
+      // 2.3 UC_RU/UD_RU/RU: near, data at upstream L1D (exclusive). Snoop with
+      // RetToSrc to fetch the old value back; ar_us_snp_dat NOT preset (the
+      // SnpRespData_I supplies the old value).
       amoStats.incNearL2AMO();
-      tbe.actions.push(Event:SendSnpUniqueRetToSrc);
-      tbe.actions.push(Event:SendDBIDResp_AR);
-      tbe.actions.push(Event:PrepareAtomicReturnLocal);
-      tbe.actions.push(Event:SendCompData_AR);
-      tbe.actions.push(Event:DelayAtomic);
-      tbe.actions.push(Event:DoAtomicLocal);
-      tbe.actions.push(Event:CheckCacheFill);
-      tbe.actions.push(Event:WriteBEPipe);
-      tbe.actions.push(Event:TagArrayWrite);
       tbe.dataToBeInvalid := false;
       tbe.doCacheFill := true;
+      tbe.ar_ds_req  := true;     // no far path -> stay BUSY_BLKD
+      tbe.ar_ds_dbid := true;
+      tbe.ar_ds_wdat := true;
+      tbe.ar_ds_rdat := true;
+      tbe.ar_ds_ack  := true;
     } else if (tbe.dataUnique) {
-      // dataUnique but none of the above matched — illegal state
       error("AtomicReturn_Forward: unexpected Unique state");
     } else {
-      // Far: flag-driven out-of-order forward to HNF/AAN.
-      // Central (downstream DBIDResp + CompData_I): HN executes the atomic.
-      // Migrate (downstream CompData_UC/UD_PD): this L2 executes locally.
-      // Send order is decided edge-by-edge in Callback_AtomicReturn_Forward;
-      // expected_req_resp is held at a sentinel until all flags complete.
-      assert(is_L2);
-      tbe.ar_fwd := true;
+      // Far: forward to HN. ar_ds_req=false -> SendAtomicReturn -> BUSY_INTR.
+      // No upstream snoop (snp flags preset true). central vs migrate decided
+      // by the downstream response (CompData_I vs CompData_UC/UD_PD).
       tbe.dataToBeInvalid := true;
       tbe.doCacheFill := false;
-      clearExpectedReqResp(tbe);
-      tbe.expected_req_resp.setExpectedCount(999);
-      Callback_AtomicReturn_Forward(tbe);
+      tbe.ar_us_snp_snt := true;  // far does not snoop L1D
+      tbe.ar_us_snp_rsp := true;
+      tbe.ar_us_snp_dat := true;
     }
+    Callback_L2_AtomicReturn(tbe);
   }
 }
 
@@ -1607,7 +1602,7 @@ action(Branch_AtomicReturn_Forward, desc="") {
   // Flag-driven paths: downstream DBIDResp arrived. Mark the edge and advance.
   if (tbe.ar_fwd) {
     tbe.ar_ds_dbid := true;
-    Callback_AtomicReturn_Forward(tbe);
+    Callback_L2_AtomicReturn(tbe);
   } else if (tbe.l1d_ar_fwd) {
     tbe.l1d_ds_dbid := true;
     Callback_L1D_AtomicReturn(tbe);
@@ -2715,7 +2710,7 @@ action(Receive_ReqDataResp, desc="") {
       if (in_msg.type == CHIDataType:NCBWrData) {
         // Upstream operand beat: payload unused, just record the edge.
         tbe.ar_us_wdat := true;
-        Callback_AtomicReturn_Forward(tbe);
+        Callback_L2_AtomicReturn(tbe);
       } else {
         // Downstream CompData beat (CompData_I central, CompData_UC/UD_PD
         // migrate). Accumulate old value, act once the line is complete.
@@ -2746,7 +2741,7 @@ action(Receive_ReqDataResp, desc="") {
             tbe.ar_ds_dbid := true;
             tbe.ar_ds_wdat := true;
           }
-          Callback_AtomicReturn_Forward(tbe);
+          Callback_L2_AtomicReturn(tbe);
         }
       }
     }
@@ -2939,6 +2934,13 @@ action(Receive_SnpDataResp, desc="") {
     tbe.ar_us_snp_dat := true;  // dirty data now in tbe.dataBlk
     tbe.dataValid := true;
     Callback_Central_Atomic(tbe);
+  }
+  // L2 unified near-AR (2.3 I_RU): SnpRespData_I brought the old value back.
+  if (tbe.ar_fwd && (tbe.expected_snp_resp.hasExpected() == false)) {
+    tbe.ar_us_snp_rsp := true;
+    tbe.ar_us_snp_dat := true;  // old value now in tbe.dataBlk
+    tbe.dataValid := true;
+    Callback_L2_AtomicReturn(tbe);
   }
 }
 
@@ -3437,6 +3439,13 @@ action(Receive_SnpResp, desc="") {
     tbe.ar_us_snp_rsp := true;
     tbe.ar_us_snp_dat := true;
     Callback_Central_Atomic(tbe);
+  }
+  // L2 unified near-AR (2.2 UC_RSC/UD_RSC/UD_RSD): the snoop only invalidates
+  // clean upstream sharers; no data returns, the old value is already in cache
+  // (ar_us_snp_dat preset true in Initiate). Just record snoop completion.
+  if (tbe.ar_fwd && (tbe.expected_snp_resp.hasExpected() == false)) {
+    tbe.ar_us_snp_rsp := true;
+    Callback_L2_AtomicReturn(tbe);
   }
 }
 
@@ -4081,16 +4090,6 @@ action(Send_Comp_WU, desc="") {
   }
 }
 
-
-action(Prepare_AtomicReturn_Local, desc="") {
-  assert(is_valid(tbe));
-  assert(tbe.dataValid);
-  assert(is_HN == false);
-  assert(is_AAN == false);
-  assert(tbe.reqType == CHIRequestType:AtomicReturn);
-  assert(tbe.dataAMOValid == false);
-  tbe.oldDataBlk := tbe.dataBlk;
-}
 
 action(Send_CompData_AR, desc="") {
   assert(is_valid(tbe));
