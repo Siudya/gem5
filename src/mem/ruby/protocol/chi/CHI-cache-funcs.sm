@@ -466,6 +466,16 @@ void Callback_L2_AtomicReturn(TBE tbe) {
   assert(is_valid(tbe));
   assert(tbe.ar_fwd);
 
+  // Downstream: forward the AtomicReturn (carries atomic_op) to the completer.
+  // MUST be first: SendAtomicReturn switches BUSY_BLKD->BUSY_INTR, and a far TBE
+  // must reach BUSY_INTR promptly so it can accept an incoming SnpAMO (Delegato)
+  // while waiting on the downstream response — otherwise a same-line SnpAMO is
+  // StallSnoop'd in BUSY_BLKD and can deadlock against the completer. near paths
+  // preset ar_ds_req=true (stay BUSY_BLKD until fully done, which is correct).
+  if (tbe.ar_ds_req == false) {
+    tbe.actions.pushNB(Event:SendAtomicReturn);
+    tbe.ar_ds_req := true;
+  }
   // Upstream: ack the requester with DBIDResp (flag-driven, no ExpectNCBWrData_A;
   // the operand edge is tracked by ar_us_wdat).
   if (tbe.ar_us_dbid == false) {
@@ -481,11 +491,6 @@ void Callback_L2_AtomicReturn(TBE tbe) {
       tbe.actions.pushNB(Event:SendSnpUnique);
     }
     tbe.ar_us_snp_snt := true;
-  }
-  // Downstream: forward the AtomicReturn (carries atomic_op) to the completer.
-  if (tbe.ar_ds_req == false) {
-    tbe.actions.pushNB(Event:SendAtomicReturn);
-    tbe.ar_ds_req := true;
   }
   // Downstream: after the completer's DBID and the upstream operand, close the
   // write-data handshake with NCBWrData (central only).
