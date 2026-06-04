@@ -2780,9 +2780,13 @@ action(Receive_ReqDataResp, desc="") {
       assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
       tbe.dataBlkValid.orMask(in_msg.bitMask);
       if (tbe.dataBlkValid.isFull()) {
+        bool had_local_data := tbe.dataValid;
         tbe.dataValid := true;
         tbe.dataAMOValid := true;
         tbe.l1d_ds_rdat := true;
+        if (had_local_data) {
+          tbe.dataToBeInvalid := false;
+        }
         Callback_L1D_AtomicReturn(tbe);
       }
     }
@@ -3099,9 +3103,15 @@ action(UpdateDataState_FromReqDataResp, desc="") {
         assert(tbe.dataMaybeDirtyUpstream == false);
 
       } else if (in_msg.type == CHIDataType:CompData_I) {
+        bool had_local_data := tbe.dataValid;
         tbe.dataValid := true;
         tbe.dataAMOValid := true;
         tbe.dataToBeInvalid := true;
+        if (had_local_data &&
+            ((tbe.reqType == CHIRequestType:AtomicLoad) ||
+             (tbe.reqType == CHIRequestType:AtomicReturn))) {
+          tbe.dataToBeInvalid := false;
+        }
         assert(tbe.dataMaybeDirtyUpstream == false);
 
       } else if (in_msg.type == CHIDataType:CBWrData_UC) {
