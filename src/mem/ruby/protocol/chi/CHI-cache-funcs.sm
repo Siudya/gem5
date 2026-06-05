@@ -501,7 +501,10 @@ void Callback_L2_AtomicReturn(TBE tbe) {
   // Upstream: return the old value (CompData_I = oldDataBlk) once it is ready.
   // Snapshot now: dataBlk holds the pre-atomic value on every path and the
   // local atomic has not run yet in this call.
-  if ((tbe.ar_us_rdat == false) && tbe.ar_us_snp_dat && tbe.ar_ds_rdat) {
+  // ar_us_snp_rsp: must wait for all snoop responses before sending CompData_AR;
+  // otherwise a hazard snoop can RestoreFromHazard into the requester's TBE and
+  // clobber dataBlkValid before the CompData_I beats are fully received.
+  if ((tbe.ar_us_rdat == false) && tbe.ar_us_snp_rsp && tbe.ar_us_snp_dat && tbe.ar_ds_rdat) {
     tbe.oldDataBlk := tbe.dataBlk;
     tbe.actions.pushNB(Event:SendCompData_AR);
     tbe.ar_us_rdat := true;
@@ -565,7 +568,7 @@ void Callback_Central_Atomic(TBE tbe) {
   }
   // Upstream: return old value to requester once both data sources are ready.
   // Snapshot before DoAtomicLocal can modify tbe.dataBlk in the same Callback.
-  if ((tbe.ar_us_rdat == false) && tbe.ar_us_snp_dat && tbe.ar_ds_rdat) {
+  if ((tbe.ar_us_rdat == false) && tbe.ar_us_snp_rsp && tbe.ar_us_snp_dat && tbe.ar_ds_rdat) {
     tbe.oldDataBlk := tbe.dataBlk;
     tbe.actions.pushNB(Event:SendCompData_AR);
     tbe.ar_us_rdat := true;

@@ -1656,10 +1656,13 @@ action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
   if (delegato_migrate == false) {
     amoStats.incCentralize();
     tbe.central_ar := true;
-    // Full miss; no sharers. SNF provides data via ReadNoSnp.
-    tbe.ar_us_snp_snt := true;
-    tbe.ar_us_snp_rsp := true;
-    tbe.ar_us_snp_dat := true;
+    // HNF cache miss: SNF provides data via ReadNoSnp. Preset snoop flags
+    // only when the directory has no sharers; if sharers exist Callback_Central_Atomic
+    // must send SnpUnique and wait for responses before issuing CompData_AR.
+    bool no_sharer := tbe.dir_sharers.isEmpty();
+    tbe.ar_us_snp_snt := no_sharer;
+    tbe.ar_us_snp_rsp := no_sharer;
+    tbe.ar_us_snp_dat := no_sharer;
     tbe.ar_ds_dbid := true;
     tbe.ar_ds_wdat := true;
     tbe.ar_ds_ack  := true;
@@ -1690,9 +1693,10 @@ action(Initiate_AtomicReturn_Miss, desc="") {
     amoStats.incCentralize();
     tbe.central_ar := true;
     tbe.dataToBeInvalid := true;
-    tbe.ar_us_snp_snt := true;
-    tbe.ar_us_snp_rsp := true;
-    tbe.ar_us_snp_dat := true;
+    bool no_sharer := tbe.dir_sharers.isEmpty();
+    tbe.ar_us_snp_snt := no_sharer;
+    tbe.ar_us_snp_rsp := no_sharer;
+    tbe.ar_us_snp_dat := no_sharer;
     tbe.ar_ds_dbid := true;
     tbe.ar_ds_wdat := true;
     tbe.ar_ds_ack  := true;
