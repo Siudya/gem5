@@ -1228,6 +1228,7 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
       DPRINTF(RubySlicc, "Delegato: AtomicReturn PoC Migrate to requester %d\n",
               machineIDToNodeID(tbe.requestor));
       tbe.reqType := CHIRequestType:ReadUnique;
+      tbe.dataUnique := true;
       tbe.dataToBeInvalid := true;
       if (directory.isTagPresent(address) == false) {
         directory.allocate(address);
@@ -1316,6 +1317,7 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
       DPRINTF(RubySlicc, "Delegato: AtomicReturn WriteBack Migrate to requester %d\n",
               machineIDToNodeID(tbe.requestor));
       tbe.reqType := CHIRequestType:ReadUnique;
+      tbe.dataUnique := true;
       tbe.dataToBeInvalid := true;
       if (directory.isTagPresent(address) == false) {
         directory.allocate(address);
@@ -1635,6 +1637,7 @@ action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
             tbe.addr, machineIDToNodeID(tbe.requestor), delegato_action);
     if (delegato_action == 2) {
       tbe.reqType := CHIRequestType:ReadUnique;
+      tbe.dataUnique := true;
       tbe.dataToBeInvalid := true;
       if (tbe.use_DMT) {
         tbe.requestorToBeExclusiveOwner := true;
@@ -1680,6 +1683,7 @@ action(Initiate_AtomicReturn_Miss, desc="") {
             tbe.addr, machineIDToNodeID(tbe.requestor), delegato_action);
     if (delegato_action == 2) {
       tbe.reqType := CHIRequestType:ReadUnique;
+      tbe.dataUnique := true;
       tbe.dataToBeInvalid := true;
       tbe.actions.push(Event:SendReadNoSnp);
       tbe.actions.push(Event:WaitCompAck);
