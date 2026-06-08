@@ -1214,12 +1214,6 @@ transition({BUSY_BLKD, BUSY_INTR}, SendSnpAMOCompDBIDResp) {
   ProcessNextState_ClearPending;
 }
 
-transition(BUSY_BLKD, ExecuteSnpAMO) {
-  Pop_TriggerQueue;
-  Execute_SnpAMO;
-  ProcessNextState_ClearPending;
-}
-
 transition({BUSY_BLKD, BUSY_INTR}, SendSnpAMOResp) {
   Pop_TriggerQueue;
   Send_SnpAMOResp;

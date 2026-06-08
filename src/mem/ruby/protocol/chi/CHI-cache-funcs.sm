@@ -535,10 +535,32 @@ void Callback_L2_AtomicReturn(TBE tbe) {
   }
 }
 
+void doAtomicLocal(TBE tbe) {
+  assert(is_valid(tbe));
+  assert(tbe.dataValid);
+  DPRINTF(RubySlicc, "DoAtomicLocal: addr=%#x\n", tbe.addr);
+  DPRINTF(RubySlicc, "Before %s\n", tbe.dataBlk);
+  tbe.oldDataBlk := tbe.dataBlk;
+  tbe.dataBlk.atomicPartial(tbe.dataBlk, tbe.atomic_op);
+  tbe.dataBlk.clearAtomicLogEntries();
+  DPRINTF(RubySlicc, "After %s\n", tbe.dataBlk);
+  tbe.dataValid := true;
+  tbe.dataUnique := true;
+  tbe.dataDirty := true;
+  tbe.dataMaybeDirtyUpstream := false;
+  tbe.dataToBeInvalid := false;
+  tbe.doCacheFill := true;
+  tbe.dir_sharers.clear();
+  tbe.dir_ownerExists := false;
+  tbe.dir_ownerIsExcl := false;
+}
+
 // Flag-driven HNF centralize AtomicReturn. Reuses the shared ar_* edges; the HNF
 // snoops the directory's sharers/owner (ar_us_snp_*) and fetches from the SNF via
-// ReadNoSnp (ar_ds_*). ar_ds_dbid/wdat/ack are preset true (no DBID/operand/ack
-// handshake at the HNF). expected_req_resp held at a sentinel, released by the gate.
+// ReadNoSnp (ar_ds_*) unless the initiate path preset ar_ds_* because local HNF
+// data or upstream snoop data will supply the old value. ar_ds_dbid/wdat/ack are
+// preset true (no DBID/operand/ack handshake at the HNF). expected_req_resp held
+// at a sentinel, released by the gate.
 //
 // INVARIANT: the completion gate MUST be the last clause (same as Callback_L2_AtomicReturn).
 void Callback_Central_Atomic(TBE tbe) {
@@ -551,16 +573,18 @@ void Callback_Central_Atomic(TBE tbe) {
     tbe.actions.pushNB(Event:SendDBIDResp_AR_Fwd);
     tbe.ar_us_dbid := true;
   }
-  // Upstream: send snoops to invalidate sharers/owner (if any).
+  // Upstream: send snoops to invalidate sharers/owner (if any). If the old-value
+  // edge is not satisfied yet, ask one holder to return data.
   if (tbe.ar_us_snp_snt == false) {
-    if (tbe.dataMaybeDirtyUpstream) {
-      tbe.actions.pushNB(Event:SendSnpUnique);
-    } else {
+    if (tbe.ar_us_snp_dat == false) {
       tbe.actions.pushNB(Event:SendSnpUniqueRetToSrc);
+    } else {
+      tbe.actions.pushNB(Event:SendSnpUnique);
     }
     tbe.ar_us_snp_snt := true;
   }
-  // Downstream: fetch data from SNF via ReadNoSnp (if not in HNF cache).
+  // Downstream: fetch data from SNF via ReadNoSnp if the initiate path did not
+  // already satisfy this edge from local data or upstream snoop data.
   // Use the _Central variant so the ExpectedMap sentinel is not dropped.
   if (tbe.ar_ds_req == false) {
     tbe.actions.pushNB(Event:SendReadNoSnp_Central);
@@ -578,16 +602,8 @@ void Callback_Central_Atomic(TBE tbe) {
       tbe.ar_ds_rdat && tbe.ar_us_wdat) {
     tbe.actions.push(Event:DelayAtomic);
     tbe.actions.push(Event:DoAtomicLocal);
-    if (tbe.dataToBeInvalid) {
-      // WriteBack path: evict result to SNF after atomic.
-      tbe.actions.push(Event:WriteBEPipe);
-      tbe.actions.push(Event:SendWriteNoSnp);
-      tbe.actions.push(Event:SendWUData);
-    } else {
-      // LocalWrite / Miss_Alloc path: keep result in HNF cache.
-      tbe.actions.push(Event:CheckCacheFill);
-      tbe.actions.push(Event:WriteBEPipe);
-    }
+    tbe.actions.push(Event:CheckCacheFill);
+    tbe.actions.push(Event:WriteBEPipe);
     tbe.actions.push(Event:TagArrayWrite);
     tbe.ar_loc_amo := true;
   }
@@ -635,6 +651,10 @@ void Callback_AAN_AtomicReturn(TBE tbe) {
   }
   // Local execution: needs fetched data + operand.
   if ((tbe.ar_loc_amo == false) && tbe.ar_ds_rdat && tbe.ar_us_wdat) {
+    if (is_AAN && tbe.is_aan_hit) {
+      aanBAT.incAMOExec();
+      amoStats.incAANAMO();
+    }
     tbe.actions.push(Event:DelayAtomic);
     tbe.actions.push(Event:DoAtomicLocal);
     tbe.actions.push(Event:CheckCacheFill);

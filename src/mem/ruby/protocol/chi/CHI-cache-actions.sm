@@ -1421,6 +1421,7 @@ action(Initiate_AtomicNoReturn_LocalWrite, desc="") {
       tbe.actions.pushNB(Event:WriteFEPipe);
     }
     tbe.actions.push(Event:DelayAtomic);
+    tbe.actions.push(Event:DoAtomicLocal);
     tbe.actions.push(Event:CheckCacheFill);
     tbe.actions.push(Event:WriteBEPipe);
     tbe.actions.push(Event:TagArrayWrite);
@@ -1467,6 +1468,7 @@ action(Initiate_AtomicNoReturn_WriteBack, desc="") {
       tbe.actions.pushNB(Event:WriteFEPipe);
     }
     tbe.actions.push(Event:DelayAtomic);
+    tbe.actions.push(Event:DoAtomicLocal);
     tbe.actions.push(Event:SendWriteNoSnp);
     tbe.actions.push(Event:WriteBEPipe);
     tbe.actions.push(Event:SendWUData);
@@ -1659,13 +1661,15 @@ action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
   if (delegato_migrate == false) {
     amoStats.incCentralize();
     tbe.central_ar := true;
-    // HNF cache miss: SNF provides data via ReadNoSnp. Preset snoop flags
-    // only when the directory has no sharers; if sharers exist Callback_Central_Atomic
-    // must send SnpUnique and wait for responses before issuing CompData_AR.
+    // HNF cache miss: any upstream sharer/owner can supply the old value via
+    // snoop data; otherwise Callback_Central_Atomic fetches SNF.
     bool no_sharer := tbe.dir_sharers.isEmpty();
+    bool data_from_snoop := !no_sharer;
     tbe.ar_us_snp_snt := no_sharer;
     tbe.ar_us_snp_rsp := no_sharer;
     tbe.ar_us_snp_dat := no_sharer;
+    tbe.ar_ds_req := data_from_snoop;
+    tbe.ar_ds_rdat := data_from_snoop;
     tbe.ar_ds_dbid := true;
     tbe.ar_ds_wdat := true;
     tbe.ar_ds_ack  := true;
@@ -1698,9 +1702,12 @@ action(Initiate_AtomicReturn_Miss, desc="") {
     tbe.central_ar := true;
     tbe.dataToBeInvalid := true;
     bool no_sharer := tbe.dir_sharers.isEmpty();
+    bool data_from_snoop := !no_sharer;
     tbe.ar_us_snp_snt := no_sharer;
     tbe.ar_us_snp_rsp := no_sharer;
     tbe.ar_us_snp_dat := no_sharer;
+    tbe.ar_ds_req := data_from_snoop;
+    tbe.ar_ds_rdat := data_from_snoop;
     tbe.ar_ds_dbid := true;
     tbe.ar_ds_wdat := true;
     tbe.ar_ds_ack  := true;
@@ -1722,6 +1729,7 @@ action(Initiate_AtomicNoReturn_Miss_Alloc, desc="") {
     tbe.actions.pushNB(Event:WriteFEPipe);
   }
   tbe.actions.push(Event:DelayAtomic);
+  tbe.actions.push(Event:DoAtomicLocal);
   tbe.actions.push(Event:CheckCacheFill);
   tbe.actions.push(Event:WriteBEPipe);
   tbe.actions.push(Event:TagArrayWrite);
@@ -1741,6 +1749,7 @@ action(Initiate_AtomicNoReturn_Miss, desc="") {
     tbe.actions.pushNB(Event:WriteFEPipe);
   }
   tbe.actions.push(Event:DelayAtomic);
+  tbe.actions.push(Event:DoAtomicLocal);
   tbe.actions.push(Event:WriteBEPipe);
   tbe.actions.push(Event:SendWriteNoSnp);
   tbe.actions.push(Event:SendWUData);
@@ -3183,25 +3192,9 @@ action(UpdateDataState_FromWUDataResp, desc="") {
 
 action(UpdateDataState_FromADataResp, desc="") {
   assert(is_valid(tbe));
-  if ((is_HN || (is_AAN && tbe.is_aan_hit)) &&
-      (tbe.expected_req_resp.hasReceivedData()) &&
+  if ((tbe.expected_req_resp.hasReceivedData()) &&
       ((tbe.reqType == CHIRequestType:AtomicReturn) ||
        (tbe.reqType == CHIRequestType:AtomicNoReturn))) {
-    DPRINTF(RubySlicc, "Atomic before %s\n", tbe.dataBlk);
-    if (is_AAN && tbe.is_aan_hit) {
-      aanBAT.incAMOExec();
-      amoStats.incAANAMO();
-    }
-
-    tbe.oldDataBlk := tbe.dataBlk;
-    tbe.dataBlk.atomicPartial(tbe.dataBlk, tbe.atomic_op);
-    tbe.dataBlk.clearAtomicLogEntries();
-    tbe.dataDirty := true;
-
-    DPRINTF(RubySlicc, "Atomic after %s\n", tbe.dataBlk);
-  } else if ((tbe.expected_req_resp.hasReceivedData()) &&
-             ((tbe.reqType == CHIRequestType:AtomicReturn) ||
-             (tbe.reqType == CHIRequestType:AtomicNoReturn))){
     tbe.dataMaybeDirtyUpstream := false;
   }
   printTBEState(tbe);
@@ -4490,16 +4483,8 @@ action(Callback_AtomicHit, desc="") {
   assert(tbe.dataValid);
   assert((tbe.reqType == CHIRequestType:AtomicLoad) ||
          (tbe.reqType == CHIRequestType:AtomicStore));
-  DPRINTF(RubySlicc, "Atomic before %s\n", tbe.dataBlk);
-
-  DataBlock oldDataBlk;
-  oldDataBlk := tbe.dataBlk;
-  tbe.dataBlk.atomicPartial(tbe.dataBlk, tbe.atomic_op);
-  tbe.dataBlk.clearAtomicLogEntries();
-
-  sequencer.atomicCallback(tbe.addr, oldDataBlk, false);
-  DPRINTF(RubySlicc, "Atomic after %s\n", tbe.dataBlk);
-  tbe.dataDirty := true;
+  doAtomicLocal(tbe);
+  sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
   if (tbe.reqType == CHIRequestType:AtomicLoad) {
     amoStats.incNearL1AMO();
   }
@@ -4585,16 +4570,8 @@ action(Callback_Miss, desc="") {
     assert(tbe.dataValid);
     assert((tbe.reqType == CHIRequestType:AtomicLoad) ||
            (tbe.reqType == CHIRequestType:AtomicStore));
-    DPRINTF(RubySlicc, "Atomic before %s\n", tbe.dataBlk);
-
-    DataBlock oldDataBlk;
-    oldDataBlk := tbe.dataBlk;
-    tbe.dataBlk.atomicPartial(tbe.dataBlk, tbe.atomic_op);
-    tbe.dataBlk.clearAtomicLogEntries();
-
-    sequencer.atomicCallback(tbe.addr, oldDataBlk, false);
-    DPRINTF(RubySlicc, "Atomic after %s\n", tbe.dataBlk);
-    tbe.dataDirty := true;
+    doAtomicLocal(tbe);
+    sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
     if (tbe.reqType == CHIRequestType:AtomicLoad) {
       amoStats.incNearL1AMO();
     }
@@ -4902,14 +4879,7 @@ action(DelayAtomic, desc="") {
 }
 
 action(DoAtomicLocal, desc="") {
-  assert(is_valid(tbe));
-  assert(tbe.dataValid);
-  DPRINTF(RubySlicc, "DoAtomicLocal: addr=%#x\n", tbe.addr);
-  DPRINTF(RubySlicc, "Before %s\n", tbe.dataBlk);
-  tbe.dataBlk.atomicPartial(tbe.dataBlk, tbe.atomic_op);
-  tbe.dataBlk.clearAtomicLogEntries();
-  DPRINTF(RubySlicc, "After %s\n", tbe.dataBlk);
-  tbe.dataDirty := true;
+  doAtomicLocal(tbe);
 }
 
 action(SnpSharedPipe, desc="") {
@@ -5301,22 +5271,6 @@ action(Send_SnpAMOCompDBIDResp, desc="Delegato: Owner sends CompDBIDResp to requ
   tbe.expected_req_resp.clear(num_msgs);
   tbe.expected_req_resp.addExpectedDataType(CHIDataType:NCBWrData);
   tbe.expected_req_resp.setExpectedCount(1);
-}
-
-// Owner-side: execute atomic after requester NCBWrData has arrived.
-action(Execute_SnpAMO, desc="Delegato: Owner executes AMO after NCBWrData") {
-  assert(is_valid(tbe));
-  assert(tbe.dataValid);
-  assert(tbe.is_snp_amo);
-
-  DPRINTF(RubySlicc, "Delegato SnpAMO: data before atomic: %s\n", tbe.dataBlk);
-  if (tbe.is_snp_amo_return) {
-    tbe.oldDataBlk := tbe.dataBlk;
-  }
-  tbe.dataBlk.atomicPartial(tbe.dataBlk, tbe.atomic_op);
-  tbe.dataBlk.clearAtomicLogEntries();
-  tbe.dataDirty := true;
-  DPRINTF(RubySlicc, "Delegato SnpAMO: data after atomic: %s\n", tbe.dataBlk);
 }
 
 // Owner-side: send SnpResp_AMO to HN-F with reuse_bit (AtomicReturn case)

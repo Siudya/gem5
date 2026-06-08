@@ -590,7 +590,6 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     SendSnpAMOCompData,       desc="Delegato: Owner sends old data to fwdRequestor";
     SendSnpAMODBIDResp,       desc="Delegato: Owner sends DBIDResp to fwdRequestor";
     SendSnpAMOCompDBIDResp,   desc="Delegato: Owner sends CompDBIDResp to fwdRequestor";
-    ExecuteSnpAMO,            desc="Delegato: Owner executes AMO after NCBWrData";
     SendSnpAMOResp,           desc="Delegato: Owner sends SnpResp_AMO to HN-F with reuse_bit";
     SendSnpAMONoFwdResp,      desc="Delegato: Owner sends SnpResp_AMO_NoFwd to HN-F (AtomicNoReturn)";
     // Snoop responses
