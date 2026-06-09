@@ -166,9 +166,9 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   int aan_bat_assoc := 2;
   bool is_AAN := "False";
 
-  // Set for the private L2 (the interconnect-facing RN-F). Selects the
-  // flag-driven out-of-order far AtomicReturn forwarding path. L1 caches keep
-  // is_L2 false and use the legacy in-order AtomicReturn path.
+  // Set for the private L2 (the interconnect-facing RN-F). L2 uses ar_fwd for
+  // flag-driven out-of-order AtomicReturn forwarding; L1D uses l1d_ar_fwd on
+  // its far AtomicLoad/AtomicReturn path.
   bool is_L2 := "False";
 
   // Delegato Predictor Table parameters (used when hnf_amo_policy == 5, at HN-F)
