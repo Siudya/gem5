@@ -893,11 +893,13 @@ action(Initiate_AtomicReturn_I, desc="") {
       tbe.atomic_to_be_done := true;
     } else {
       // Far: send to HN or AAN, depending on the orthogonal AAN policy.
-      tbe.actions.push(Event:SendAtomicReturn);
-      tbe.actions.push(Event:SendARData);
+      tbe.l1d_ar_fwd := true;
       tbe.dataToBeInvalid := true;
       tbe.doCacheFill := false;
       tbe.atomic_to_be_done := false;
+      clearExpectedReqResp(tbe);
+      tbe.expected_req_resp.setExpectedCount(999);
+      Callback_L1D_AtomicReturn(tbe);
     }
   } else {
     error("Invalid L1D AMO policy");
@@ -967,11 +969,13 @@ action(Initiate_AtomicReturn_SD, desc="") {
       tbe.atomic_to_be_done := true;
     } else {
       // Far: send to HN or AAN, depending on the orthogonal AAN policy.
-      tbe.actions.push(Event:SendAtomicReturn);
-      tbe.actions.push(Event:SendARData);
+      tbe.l1d_ar_fwd := true;
       tbe.dataToBeInvalid := true;
       tbe.doCacheFill := false;
       tbe.atomic_to_be_done := false;
+      clearExpectedReqResp(tbe);
+      tbe.expected_req_resp.setExpectedCount(999);
+      Callback_L1D_AtomicReturn(tbe);
     }
   } else {
     error("Invalid L1D AMO policy");
@@ -1037,11 +1041,13 @@ action(Initiate_AtomicReturn_SC, desc="") {
       tbe.actions.push(Event:TagArrayWrite);
       tbe.atomic_to_be_done := true;
     } else {
-      tbe.actions.push(Event:SendAtomicReturn);
-      tbe.actions.push(Event:SendARData);
+      tbe.l1d_ar_fwd := true;
       tbe.dataToBeInvalid := true;
       tbe.doCacheFill := false;
       tbe.atomic_to_be_done := false;
+      clearExpectedReqResp(tbe);
+      tbe.expected_req_resp.setExpectedCount(999);
+      Callback_L1D_AtomicReturn(tbe);
     }
   } else {
     error("Invalid L1D AMO policy");
