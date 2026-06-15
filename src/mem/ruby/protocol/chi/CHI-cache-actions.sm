@@ -2748,6 +2748,7 @@ action(Receive_ReqDataResp, desc="") {
             tbe.doCacheFill := false;
             tbe.ar_ds_ack := true;   // no CompAck on central path
             tbe.ar_loc_amo := true;  // remote execution
+            tbe.ar_loc_wr_cache := true; // no local cache write
           } else {
             // Migrate/AAN-fill (CompData_UC/UD_PD): ownership moved here.
             tbe.dataUnique := true;
@@ -4088,13 +4089,14 @@ action(Send_CompData_AR, desc="") {
   tbe.requestorToBeOwner := false;
   tbe.snd_destination := tbe.requestor;
   if (tbe.central_ar) {
-    // HNF central relay: oldDataBlk snapshotted in Callback_Central_Atomic under
-    // (ar_us_snp_dat && ar_ds_rdat). A concurrent hazard snoop may invalidate the
-    // live line afterwards (legal); the old value is locked in oldDataBlk.
+    // HNF central path: DoAtomicLocal snapshots oldDataBlk before modifying the
+    // live TBE data. A concurrent hazard snoop may invalidate the live line
+    // afterwards (legal); the old value is locked in oldDataBlk.
     assert(tbe.ar_ds_rdat && tbe.ar_us_snp_dat);
     setupPendingSend_AR(tbe);
   } else if (tbe.ar_fwd) {
-    // L2 forward relay: oldDataBlk captured when CompData arrived (ar_ds_rdat).
+    // L2/AAN forward path: local execution snapshots oldDataBlk in
+    // DoAtomicLocal; remote execution captures it when CompData arrives.
     assert(tbe.ar_ds_rdat);
     setupPendingSend_AR(tbe);
   } else if (tbe.l1d_ar_fwd) {

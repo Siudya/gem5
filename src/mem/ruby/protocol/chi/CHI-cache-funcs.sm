@@ -498,39 +498,43 @@ void Callback_L2_AtomicReturn(TBE tbe) {
     tbe.actions.pushNB(Event:SendARData_Fwd);
     tbe.ar_ds_wdat := true;
   }
-  // Upstream: return the old value (CompData_I = oldDataBlk) once it is ready.
-  // Snapshot now: dataBlk holds the pre-atomic value on every path and the
-  // local atomic has not run yet in this call.
-  // ar_us_snp_rsp: must wait for all snoop responses before sending CompData_AR;
-  // otherwise a hazard snoop can RestoreFromHazard into the requester's TBE and
-  // clobber dataBlkValid before the CompData_I beats are fully received.
-  if ((tbe.ar_us_rdat == false) && tbe.ar_us_snp_rsp && tbe.ar_us_snp_dat && tbe.ar_ds_rdat) {
-    tbe.oldDataBlk := tbe.dataBlk;
-    tbe.actions.pushNB(Event:SendCompData_AR);
-    tbe.ar_us_rdat := true;
-  }
-  // Downstream: CompAck to the completer (migrate only).
+  // Downstream: CompAck only closes the completer's data response edge.  It
+  // depends on ar_ds_rdat, not on the local atomic/update sequence.
   if ((tbe.ar_ds_ack == false) && tbe.ar_ds_rdat) {
     tbe.actions.pushNB(Event:SendCompAck);
     tbe.ar_ds_ack := true;
   }
-  // Local execution (near + migrate). Needs operand + old value sent + all snoop
-  // data in + snoop invalidate drained (ar_us_snp_rsp: don't run the atomic while
-  // an upstream clean copy still spans it) + downstream data + CompAck settled.
-  if ((tbe.ar_loc_amo == false) && tbe.ar_us_wdat && tbe.ar_us_rdat &&
-      tbe.ar_us_snp_rsp && tbe.ar_us_snp_dat && tbe.ar_ds_rdat && tbe.ar_ds_ack) {
-    tbe.actions.push(Event:DelayAtomic);
-    tbe.actions.push(Event:DoAtomicLocal);
+  // Local execution (near + migrate) happens before returning CompData_AR.
+  // It uses tbe.atomic_op from the original AtomicReturn request, so it does
+  // not wait for the requester's NCBWrData payload.  The payload edge is still
+  // tracked by ar_us_wdat and must arrive before the TBE can complete.
+  if ((tbe.ar_loc_amo == false) && tbe.ar_us_snp_rsp && tbe.ar_us_snp_dat &&
+      tbe.ar_ds_rdat) {
+    tbe.actions.pushNB(Event:DelayAtomic);
+    tbe.actions.pushNB(Event:DoAtomicLocal);
+    tbe.ar_loc_amo := true;
+  }
+  // Upstream: return old data after the local/remote atomic edge is satisfied.
+  // Remote far-central path presets ar_loc_amo when CompData_I arrives because
+  // the downstream HNF already executed the atomic.
+  if ((tbe.ar_us_rdat == false) && tbe.ar_loc_amo) {
+    tbe.actions.pushNB(Event:SendCompData_AR);
+    tbe.ar_us_rdat := true;
+  }
+  // Local cache/tag writeback is a separate edge after CompData_AR.  Functional
+  // reads can already observe the updated TBE data after ar_loc_amo.
+  if ((tbe.ar_loc_wr_cache == false) && tbe.ar_loc_amo && tbe.ar_us_rdat) {
     tbe.actions.push(Event:CheckCacheFill);
     tbe.actions.push(Event:WriteBEPipe);
     tbe.actions.push(Event:TagArrayWrite);
-    tbe.ar_loc_amo := true;
+    tbe.ar_loc_wr_cache := true;
   }
   // Completion gate (MUST BE LAST): release the sentinel when all edges done.
   if (tbe.ar_us_dbid && tbe.ar_us_wdat && tbe.ar_us_rdat &&
       tbe.ar_us_snp_snt && tbe.ar_us_snp_rsp && tbe.ar_us_snp_dat &&
       tbe.ar_ds_req && tbe.ar_ds_dbid && tbe.ar_ds_wdat &&
-      tbe.ar_ds_rdat && tbe.ar_ds_ack && tbe.ar_loc_amo) {
+      tbe.ar_ds_rdat && tbe.ar_ds_ack && tbe.ar_loc_amo &&
+      tbe.ar_loc_wr_cache) {
     tbe.expected_req_resp.setExpectedCount(tbe.expected_req_resp.received());
   }
 }
@@ -590,27 +594,32 @@ void Callback_Central_Atomic(TBE tbe) {
     tbe.actions.pushNB(Event:SendReadNoSnp_Central);
     tbe.ar_ds_req := true;
   }
-  // Upstream: return old value to requester once both data sources are ready.
-  // Snapshot before DoAtomicLocal can modify tbe.dataBlk in the same Callback.
-  if ((tbe.ar_us_rdat == false) && tbe.ar_us_snp_rsp && tbe.ar_us_snp_dat && tbe.ar_ds_rdat) {
-    tbe.oldDataBlk := tbe.dataBlk;
+  // Local: execute atomic once we have exclusive ownership and the old value.
+  // The atomic operand is already carried by tbe.atomic_op from the request, so
+  // this path does not wait for the requester's NCBWrData payload.
+  if ((tbe.ar_loc_amo == false) && tbe.ar_us_snp_rsp && tbe.ar_us_snp_dat &&
+      tbe.ar_ds_rdat) {
+    tbe.actions.pushNB(Event:DelayAtomic);
+    tbe.actions.pushNB(Event:DoAtomicLocal);
+    tbe.ar_loc_amo := true;
+  }
+  // Upstream: return old data after the local atomic/update edge is satisfied.
+  if ((tbe.ar_us_rdat == false) && tbe.ar_loc_amo) {
     tbe.actions.pushNB(Event:SendCompData_AR);
     tbe.ar_us_rdat := true;
   }
-  // Local: execute atomic once we have exclusive ownership, old value, and operand.
-  if ((tbe.ar_loc_amo == false) && tbe.ar_us_snp_rsp && tbe.ar_us_snp_dat &&
-      tbe.ar_ds_rdat && tbe.ar_us_wdat) {
-    tbe.actions.push(Event:DelayAtomic);
-    tbe.actions.push(Event:DoAtomicLocal);
+  // Local cache/tag writeback is a separate edge after CompData_AR.
+  if ((tbe.ar_loc_wr_cache == false) && tbe.ar_loc_amo && tbe.ar_us_rdat) {
     tbe.actions.push(Event:CheckCacheFill);
     tbe.actions.push(Event:WriteBEPipe);
     tbe.actions.push(Event:TagArrayWrite);
-    tbe.ar_loc_amo := true;
+    tbe.ar_loc_wr_cache := true;
   }
   // Completion gate (MUST BE LAST): release sentinel when all edges done.
   if (tbe.ar_us_dbid && tbe.ar_us_wdat && tbe.ar_us_rdat &&
       tbe.ar_us_snp_snt && tbe.ar_us_snp_rsp && tbe.ar_us_snp_dat &&
-      tbe.ar_ds_req && tbe.ar_ds_rdat && tbe.ar_loc_amo) {
+      tbe.ar_ds_req && tbe.ar_ds_rdat && tbe.ar_loc_amo &&
+      tbe.ar_loc_wr_cache) {
     tbe.expected_req_resp.setExpectedCount(tbe.expected_req_resp.received());
   }
 }
@@ -638,33 +647,40 @@ void Callback_AAN_AtomicReturn(TBE tbe) {
     tbe.actions.pushNB(Event:SendReadUnique);
     tbe.ar_ds_req := true;
   }
-  // Downstream: CompAck after ReadUnique data (fill only; hit presets ar_ds_ack).
+  // Downstream: CompAck only acknowledges the ReadUnique data response and
+  // does not depend on local AMO execution.
   if ((tbe.ar_ds_ack == false) && tbe.ar_ds_rdat) {
     tbe.actions.pushNB(Event:SendCompAck);
     tbe.ar_ds_ack := true;
   }
-  // Upstream: return old value (CompData_I = oldDataBlk) once data is ready.
-  if ((tbe.ar_us_rdat == false) && tbe.ar_ds_rdat) {
-    tbe.oldDataBlk := tbe.dataBlk;
-    tbe.actions.pushNB(Event:SendCompData_AR);
-    tbe.ar_us_rdat := true;
-  }
-  // Local execution: needs fetched data + operand.
-  if ((tbe.ar_loc_amo == false) && tbe.ar_ds_rdat && tbe.ar_us_wdat) {
+  // Local execution: needs fetched data.  The atomic operand is already in
+  // tbe.atomic_op, so do not wait for the requester NCBWrData before executing
+  // locally.
+  if ((tbe.ar_loc_amo == false) && tbe.ar_ds_rdat) {
     if (is_AAN && tbe.is_aan_hit) {
       aanBAT.incAMOExec();
       amoStats.incAANAMO();
     }
-    tbe.actions.push(Event:DelayAtomic);
-    tbe.actions.push(Event:DoAtomicLocal);
+    tbe.actions.pushNB(Event:DelayAtomic);
+    tbe.actions.pushNB(Event:DoAtomicLocal);
+    tbe.ar_loc_amo := true;
+  }
+  // Upstream: return old data after the local AMO/update edge is satisfied.
+  if ((tbe.ar_us_rdat == false) && tbe.ar_loc_amo) {
+    tbe.actions.pushNB(Event:SendCompData_AR);
+    tbe.ar_us_rdat := true;
+  }
+  // Local cache/tag writeback is a separate edge after CompData_AR.
+  if ((tbe.ar_loc_wr_cache == false) && tbe.ar_loc_amo && tbe.ar_us_rdat) {
     tbe.actions.push(Event:CheckCacheFill);
     tbe.actions.push(Event:WriteBEPipe);
     tbe.actions.push(Event:TagArrayWrite);
-    tbe.ar_loc_amo := true;
+    tbe.ar_loc_wr_cache := true;
   }
   // Completion gate (MUST BE LAST). No snoop edges at AAN (leaf cache).
   if (tbe.ar_us_dbid && tbe.ar_us_wdat && tbe.ar_us_rdat &&
-      tbe.ar_ds_req && tbe.ar_ds_rdat && tbe.ar_ds_ack && tbe.ar_loc_amo) {
+      tbe.ar_ds_req && tbe.ar_ds_rdat && tbe.ar_ds_ack && tbe.ar_loc_amo &&
+      tbe.ar_loc_wr_cache) {
     tbe.expected_req_resp.setExpectedCount(tbe.expected_req_resp.received());
   }
 }

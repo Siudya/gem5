@@ -855,7 +855,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool ar_fwd, default="false", desc="AR: this TBE is on the L2 flag-driven path";
     bool ar_us_dbid, default="false", desc="AR upstream: DBIDResp sent to requester";
     bool ar_us_wdat, default="false", desc="AR upstream: operand (NCBWrData) received from requester";
-    bool ar_us_rdat, default="false", desc="AR upstream: old value (CompData_I) sent to requester";
+    bool ar_us_rdat, default="false", desc="AR upstream: old value (CompData_I) queued/sent to requester";
     bool ar_us_snp_snt, default="false", desc="AR upstream: all snoops sent (preset true if none needed)";
     bool ar_us_snp_rsp, default="false", desc="AR upstream: all snoop responses received (preset true if none needed)";
     bool ar_us_snp_dat, default="false", desc="AR upstream: snoop data (old value) received (preset true if not supplied by snoop)";
@@ -864,7 +864,8 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool ar_ds_wdat, default="false", desc="AR downstream: operand (NCBWrData) sent to completer (preset true if not sent)";
     bool ar_ds_rdat, default="false", desc="AR downstream: data received from completer (preset true if local data)";
     bool ar_ds_ack,  default="false", desc="AR downstream: CompAck sent to completer (preset true if not needed)";
-    bool ar_loc_amo, default="false", desc="AR local: atomic executed locally (preset true if executed remotely)";
+    bool ar_loc_amo, default="false", desc="AR local: local atomic execution queued, or preset true if executed remotely";
+    bool ar_loc_wr_cache, default="false", desc="AR local: cache/tag writeback queued (preset true if not needed)";
 
     // HNF centralize AtomicReturn: reuses the ar_* edges above (snoops go to the
     // directory's sharers/owner). See CHI-cache-funcs.sm Callback_Central_Atomic.
