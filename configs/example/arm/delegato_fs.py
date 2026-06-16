@@ -41,7 +41,7 @@ Modes of operation:
   Bare-metal:   gem5.opt delegato_fs.py --bare-metal <elf> --cpu timing
                 Boot bare-metal ELF directly (no Linux kernel).  The ELF
                 must be linked at 0x80080000 (VExpress physical RAM + 512K).
-                Uses boot.arm64 bootloader for DTB passing and spin-table
+                Uses boot_v2.arm64 bootloader for DTB passing and spin-table
                 secondary CPU boot.
 """
 
@@ -165,20 +165,21 @@ def create(args):
     boot_cpu_class = TimingSimpleCPU if args.timing_checkpoint else target_cpu_class
 
     mem_mode = boot_cpu_class.memory_mode()
+    platform = VExpress_GEM5_V2()
 
     # Bare-metal vs Linux workload
     if args.bare_metal:
         system = devices.ArmRubySystem(
             args.mem_size,
             mem_mode=mem_mode,
-            platform=None,
+            platform=platform,
             workload=ArmFsWorkload(object_file=args.bare_metal),
         )
     else:
         system = devices.ArmRubySystem(
             args.mem_size,
             mem_mode=mem_mode,
-            platform=None,
+            platform=platform,
             workload=ArmFsLinux(object_file=args.kernel),
         )
 
@@ -304,10 +305,7 @@ def create(args):
     )
 
     system.connect()
-    system.realview.setupBootLoader(
-        system, SysPaths.binary,
-        boot_loader=[SysPaths.binary("boot.arm64")]
-    )
+    system.realview.setupBootLoader(system, SysPaths.binary)
 
     # Bare-metal: override load_addr_offset so the ELF is loaded at its
     # link address (0x80080000) unchanged.  setupBootLoader already set
