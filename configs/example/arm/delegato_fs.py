@@ -227,6 +227,8 @@ def create(args):
             for cpu in cpus:
                 cpu.switched_out = True
 
+    system.attach_io()
+
     Ruby.create_system(
         args,
         True,

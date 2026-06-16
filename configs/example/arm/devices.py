@@ -504,13 +504,20 @@ class ArmRubySystem(BaseSimpleSystem):
         super().__init__(mem_size, platform, **kwargs)
         self._dma_ports = []
         self._mem_ports = []
+        self._io_attached = False
 
-    def connect(self):
+    def attach_io(self):
+        if self._io_attached:
+            return
         self.realview.attachOnChipIO(
             self.iobus, dma_ports=self._dma_ports, mem_ports=self._mem_ports
         )
 
         self.realview.attachIO(self.iobus, dma_ports=self._dma_ports)
+        self._io_attached = True
+
+    def connect(self):
+        self.attach_io()
 
         ruby_cpu_targets = getattr(self, "_ruby_cpu_port_targets", None)
         if ruby_cpu_targets is None:
