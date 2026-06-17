@@ -31,13 +31,10 @@ Topology: 4×12 CustomMesh, 2 chiplets with D2D links.
 Default parameters match the Delegato paper (MICRO '25, Table 3).
 
 Modes of operation:
-  Normal:       gem5.opt delegato_fs.py --kernel <Image> --initrd <cpio.gz> --cpu <timing|minor|hpi|o3>
-                Boot and run on the same CPU from start to finish.
-  Checkpoint:   gem5.opt delegato_fs.py --kernel <Image> --initrd <cpio.gz> --timing-checkpoint --cpu <timing|minor|hpi|o3>
-                Boot to the workload ROI on TimingSimpleCPU, switch to the
-                target CPU, reset stats, then save a checkpoint.
-  Restore:      gem5.opt delegato_fs.py --kernel <Image> --initrd <cpio.gz> --timing-checkpoint --restore-checkpoint <dir> --cpu <timing|minor|hpi|o3>
-                Restore a checkpoint produced by Checkpoint mode and continue.
+  Linux FS:     gem5.opt delegato_fs.py --kernel <Image> --initrd <cpio.gz> --cpu <timing|minor|hpi|o3>
+                With --cpu timing, boot and run on TimingSimpleCPU.  With any
+                other CPU, boot Linux on TimingSimpleCPU, switch to the target
+                CPU at workload ROI, reset stats, and continue.
   Bare-metal:   gem5.opt delegato_fs.py --bare-metal <elf> --cpu timing
                 Boot bare-metal ELF directly (no Linux kernel).  The ELF
                 must be linked at 0x80080000 (VExpress physical RAM + 512K).
@@ -156,13 +153,18 @@ def _get_switch_cpu_list(system):
     return list(zip(_get_boot_cpus(system), system.switch_cpus))
 
 
+def _uses_timing_boot(args, target_cpu_class):
+    return not args.bare_metal and target_cpu_class is not TimingSimpleCPU
+
+
 # ─── System creation ─────────────────────────────────────────────────────
 
 def create(args):
     """Create and configure the system."""
 
     target_cpu_class = cpu_types[args.cpu]
-    boot_cpu_class = TimingSimpleCPU if args.timing_checkpoint else target_cpu_class
+    use_timing_boot = _uses_timing_boot(args, target_cpu_class)
+    boot_cpu_class = TimingSimpleCPU if use_timing_boot else target_cpu_class
 
     mem_mode = boot_cpu_class.memory_mode()
     platform = VExpress_GEM5_V2()
@@ -215,17 +217,13 @@ def create(args):
         for cpu in cluster.cpus:
             cpus.append(cpu)
 
-    switch_cpus = None
-    if args.timing_checkpoint and target_cpu_class is not boot_cpu_class:
+    if use_timing_boot and target_cpu_class is not boot_cpu_class:
         switch_cpus = _make_switch_cpus(
             system,
             target_cpu_class,
             args.heartbeat_insts,
-            switched_out=not args.restore_checkpoint,
+            switched_out=True,
         )
-        if args.restore_checkpoint:
-            for cpu in cpus:
-                cpu.switched_out = True
 
     system.attach_io()
 
@@ -238,10 +236,7 @@ def create(args):
         system.realview.bootmem,
         cpus,
     )
-    if args.restore_checkpoint and switch_cpus is not None:
-        system._ruby_cpu_port_targets = switch_cpus
-    else:
-        system._ruby_cpu_port_targets = cpus
+    system._ruby_cpu_port_targets = cpus
 
     block_size_bits = int(math.log(args.cacheline_size, 2))
     if (1 << block_size_bits) != args.cacheline_size:
@@ -348,7 +343,7 @@ def create(args):
         if args.initrd:
             kernel_cmd.append("rdinit=/init")
         kernel_cmd.append("gem5_m5ops_mmio=1")
-        if args.timing_checkpoint:
+        if use_timing_boot:
             kernel_cmd.append("gem5_roi_checkpoint=1")
         kernel_cmd.append("iomem=relaxed")
 
@@ -360,24 +355,22 @@ def create(args):
 # ─── Simulation loop ─────────────────────────────────────────────────────
 
 def run(args, root):
+    roi_switched = False
+
     while True:
         event = m5.simulate()
         exit_msg = event.getCause()
 
         if exit_msg == "checkpoint":
-            if not args.timing_checkpoint:
-                m5.fatal("unexpected checkpoint event outside --timing-checkpoint")
-            if args.restore_checkpoint:
-                m5.fatal("unexpected checkpoint event after restore")
-            if hasattr(root.system, "switch_cpus"):
-                print("Switching from timing CPU to %s CPU @ tick %d"
-                      % (args.cpu, m5.curTick()))
-                m5.switchCpus(root.system, _get_switch_cpu_list(root.system))
+            if not hasattr(root.system, "switch_cpus") or roi_switched:
+                m5.fatal("unexpected checkpoint event")
+            print("ROI reached; switching from timing CPU to %s CPU @ tick %d"
+                  % (args.cpu, m5.curTick()))
+            m5.switchCpus(root.system, _get_switch_cpu_list(root.system))
+            roi_switched = True
             m5.stats.reset()
-            print("Stats reset before checkpoint @ tick %d" % m5.curTick())
-            m5.checkpoint(args.checkpoint_dir)
-            print("Timing ROI checkpoint saved: %s" % args.checkpoint_dir)
-            sys.exit(0)
+            print("Stats reset after ROI CPU switch @ tick %d" % m5.curTick())
+            continue
 
         if exit_msg == "m5_exit instruction encountered":
             print(f"Simulation complete @ tick {m5.curTick()}")
@@ -405,13 +398,6 @@ def main():
                              "Mutually exclusive with --kernel/--initrd.")
     parser.add_argument("--initrd", type=str, default=None,
                         help="Path to initrd/initramfs (cpio.gz)")
-    parser.add_argument("--timing-checkpoint", action="store_true",
-                        help="Boot with TimingSimpleCPU until ROI, switch to "
-                             "--cpu, reset stats, and save --checkpoint-dir.")
-    parser.add_argument("--checkpoint-dir", type=str, default=None,
-                        help="Directory used by --timing-checkpoint.")
-    parser.add_argument("--restore-checkpoint", type=str, default=None,
-                        help="Restore from a timing checkpoint directory.")
     parser.add_argument("--disk-image", type=str, default=None,
                         help="Path to disk image (optional)")
     parser.add_argument("--dtb", type=str, default=None,
@@ -421,8 +407,8 @@ def main():
 
     # CPU
     parser.add_argument("--cpu", choices=list(cpu_types.keys()),
-                        default="minor",
-                        help="CPU model (default: minor)")
+                        default="o3",
+                        help="CPU model (default: o3)")
     parser.add_argument("--cpu-freq", type=str, default="3GHz",
                         help="CPU frequency (default: 3GHz)")
     parser.add_argument("-n", "--num-cpus", type=int, default=16,
@@ -475,13 +461,6 @@ def main():
             parser.error("--bare-metal and --initrd are mutually exclusive")
     elif not args.kernel:
         parser.error("--kernel is required (unless --bare-metal is specified)")
-    if args.restore_checkpoint and not args.timing_checkpoint:
-        parser.error("--restore-checkpoint requires --timing-checkpoint")
-    if args.timing_checkpoint:
-        if args.bare_metal:
-            parser.error("--timing-checkpoint requires Linux workload mode")
-        if not args.restore_checkpoint and not args.checkpoint_dir:
-            parser.error("--timing-checkpoint requires --checkpoint-dir")
 
     # Force topology and CHI config for Delegato
     # Explicit dispatch: 4 => 2x4, 16 => 4x8, 32 => 4x12
@@ -534,12 +513,7 @@ def main():
     root = Root(full_system=True)
     root.system = create(args)
 
-    m5.instantiate(args.restore_checkpoint)
-    if args.restore_checkpoint:
-        m5.stats.reset()
-        print("Restored checkpoint: %s" % args.restore_checkpoint)
-        print("Continuing on %s CPU @ tick %d" % (args.cpu, m5.curTick()))
-        print("Stats reset after restore @ tick %d" % m5.curTick())
+    m5.instantiate()
 
     run(args, root)
 
