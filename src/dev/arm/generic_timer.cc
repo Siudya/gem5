@@ -534,6 +534,7 @@ GenericTimer::handleStream(CoreTimers::EventStream *ev_stream,
 void
 GenericTimer::syncSystemCounter(uint64_t value)
 {
+    EventQueue::ScopedMigration migrate(eventQueue());
     systemCounter.setValue(value, false);
 }
 

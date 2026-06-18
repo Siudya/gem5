@@ -91,6 +91,7 @@ namespace statistics
 void
 pythonDump()
 {
+    py::gil_scoped_acquire acquire;
     py::module_ m = py::module_::import("m5.stats");
     m.attr("dump")();
 }
@@ -98,6 +99,7 @@ pythonDump()
 void
 pythonReset()
 {
+    py::gil_scoped_acquire acquire;
     py::module_ m = py::module_::import("m5.stats");
     m.attr("reset")();
 }

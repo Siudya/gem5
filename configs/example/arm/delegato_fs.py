@@ -33,8 +33,8 @@ Default parameters match the Delegato paper (MICRO '25, Table 3).
 Modes of operation:
   Linux FS:     gem5.opt delegato_fs.py --kernel <Image> --initrd <cpio.gz> --cpu <timing|minor|hpi|o3>
                 With --cpu timing, boot and run on TimingSimpleCPU.  With any
-                other CPU, boot Linux on TimingSimpleCPU, switch to the target
-                CPU at workload ROI, reset stats, and continue.
+                other CPU, boot Linux on ArmV8KvmCPU, switch to the target CPU
+                at workload ROI, reset stats, and continue.
   Bare-metal:   gem5.opt delegato_fs.py --bare-metal <elf> --cpu timing
                 Boot bare-metal ELF directly (no Linux kernel).  The ELF
                 must be linked at 0x80080000 (VExpress physical RAM + 512K).
@@ -48,6 +48,7 @@ import os
 import sys
 
 import m5
+import _m5.core
 from m5.objects import *
 from m5.options import *
 from m5.util import addToPath
@@ -55,6 +56,11 @@ from m5.util import addToPath
 m5.util.addToPath("../..")
 
 import devices
+try:
+    from m5.objects.KvmGic import MuxingKvmGicV3
+except ImportError:
+    MuxingKvmGicV3 = None
+
 from common import (
     ObjectList,
     SysPaths,
@@ -114,7 +120,7 @@ cpu_types = {
 }
 
 
-def _get_boot_cpus(system):
+def _get_target_cpus(system):
     return [
         cpu
         for cluster in system.cpu_cluster
@@ -122,39 +128,138 @@ def _get_boot_cpus(system):
     ]
 
 
+def _get_boot_cpus(system):
+    return getattr(system, "boot_cpus", _get_target_cpus(system))
+
+
+def _using_pdes(root):
+    for obj in root.descendants():
+        if (
+            not m5.proxy.isproxy(obj.eventq_index)
+            and obj.eventq_index != root.eventq_index
+        ):
+            return True
+    return False
+
+
 def _set_cpu_heartbeat(system, heartbeat_insts):
-    for cpu in _get_boot_cpus(system):
+    cpus = list(_get_target_cpus(system))
+    for cpu in getattr(system, "boot_cpus", []):
+        if cpu not in cpus:
+            cpus.append(cpu)
+    for cpu in cpus:
         cpu.heartbeat_insts = heartbeat_insts
 
 
-def _make_switch_cpus(
-    system, target_cpu_class, heartbeat_insts, switched_out=True
-):
-    switch_cpus = []
-    for old_cpu in _get_boot_cpus(system):
-        new_cpu = target_cpu_class(
-            switched_out=switched_out,
-            cpu_id=old_cpu.cpu_id,
-            clk_domain=old_cpu.clk_domain,
+def _get_switch_boot_cpu_class():
+    if "ArmV8KvmCPU" not in ObjectList.cpu_list.get_names():
+        m5.fatal("ArmV8KvmCPU is not available in this gem5 build")
+    return ObjectList.cpu_list.get("ArmV8KvmCPU")
+
+
+def _is_kvm_cpu(cpu_class):
+    return ObjectList.is_kvm_cpu(cpu_class)
+
+
+def _make_platform(use_kvm):
+    platform = VExpress_GEM5_V2()
+
+    if not use_kvm:
+        return platform
+
+    if MuxingKvmGicV3 is None:
+        m5.fatal("MuxingKvmGicV3 is not available in this gem5 build")
+
+    platform.gic = MuxingKvmGicV3(
+        dist_addr=0x2C000000,
+        redist_addr=0x2C010000,
+        it_lines=512,
+        maint_int=ArmPPI(num=25),
+        its=Gicv3Its(pio_addr=0x2E010000),
+    )
+    platform.gic.cpu_max = 128
+
+    return platform
+
+
+def _configure_kvm(system, cpus, target_cpus):
+    system.kvm_vm = KvmVM()
+    system.release = ArmDefaultRelease.for_kvm()
+    system._have_psci = True
+    system.kvm_affinity_fold_16 = len(cpus) > 16
+
+    for idx, cpu in enumerate(cpus):
+        cpu.usePerf = False
+        if system.kvm_affinity_fold_16:
+            cpu.socket_id = int(cpu.cpu_id) // 16
+        if len(cpus) > 1:
+            for obj in cpu.descendants():
+                obj.eventq_index = 0
+            cpu.eventq_index = idx + 1
+
+    if system.kvm_affinity_fold_16:
+        for cpu in target_cpus:
+            cpu.socket_id = int(cpu.cpu_id) // 16
+
+
+def _configure_cpu_affinity(system, cpus):
+    system.kvm_affinity_fold_16 = len(cpus) > 16
+    if system.kvm_affinity_fold_16:
+        for cpu in cpus:
+            cpu.socket_id = int(cpu.cpu_id) // 16
+
+
+def _configure_kvm_quantum(root):
+    if _using_pdes(root):
+        sim_quantum = "1ms"
+        m5.util.inform(
+            "Running in PDES mode with a %s simulation quantum.",
+            sim_quantum,
         )
-        new_cpu.socket_id = old_cpu.socket_id
-        new_cpu.workload = old_cpu.workload
-        new_cpu.isa = old_cpu.isa
-        new_cpu.progress_interval = old_cpu.progress_interval
-        new_cpu.heartbeat_insts = heartbeat_insts
-        new_cpu.createThreads()
-        new_cpu.createInterruptController()
-        switch_cpus.append(new_cpu)
-    system.switch_cpus = switch_cpus
-    return switch_cpus
+        root.sim_quantum = int(1e9)
+
+
+def _make_boot_cpus(system, boot_cpu_class, target_cpus, heartbeat_insts):
+    boot_cpus = []
+    for target_cpu in target_cpus:
+        boot_cpu = boot_cpu_class(
+            cpu_id=target_cpu.cpu_id,
+            clk_domain=target_cpu.clk_domain,
+        )
+        boot_cpu.socket_id = target_cpu.socket_id
+        boot_cpu.workload = target_cpu.workload
+        boot_cpu.isa = target_cpu.isa
+        boot_cpu.progress_interval = target_cpu.progress_interval
+        boot_cpu.heartbeat_insts = heartbeat_insts
+        boot_cpu.createThreads()
+        boot_cpu.createInterruptController()
+        boot_cpus.append(boot_cpu)
+    system.boot_cpus = boot_cpus
+    return boot_cpus
+
+
+def _set_target_cpus_switched_out(system, switched_out):
+    for cpu in _get_target_cpus(system):
+        cpu.switched_out = switched_out
 
 
 def _get_switch_cpu_list(system):
-    return list(zip(_get_boot_cpus(system), system.switch_cpus))
+    return list(zip(_get_boot_cpus(system), _get_target_cpus(system)))
 
 
-def _uses_timing_boot(args, target_cpu_class):
-    return not args.bare_metal and target_cpu_class is not TimingSimpleCPU
+def _checkpoint_at_switch(cpt_dir):
+    os.makedirs(cpt_dir, exist_ok=True)
+    print("Writing checkpoint: %s" % cpt_dir)
+    _m5.core.serializeAll(cpt_dir)
+    print("Checkpoint written: %s" % cpt_dir)
+
+
+def _uses_switch_boot(args):
+    return not args.bare_metal and not _uses_restore(args)
+
+
+def _uses_restore(args):
+    return bool(getattr(args, "restore", None))
 
 
 # ─── System creation ─────────────────────────────────────────────────────
@@ -163,11 +268,13 @@ def create(args):
     """Create and configure the system."""
 
     target_cpu_class = cpu_types[args.cpu]
-    use_timing_boot = _uses_timing_boot(args, target_cpu_class)
-    boot_cpu_class = TimingSimpleCPU if use_timing_boot else target_cpu_class
+    use_switch_boot = _uses_switch_boot(args)
+    boot_cpu_class = (
+        _get_switch_boot_cpu_class() if use_switch_boot else target_cpu_class
+    )
 
     mem_mode = boot_cpu_class.memory_mode()
-    platform = VExpress_GEM5_V2()
+    platform = _make_platform(_is_kvm_cpu(boot_cpu_class))
 
     # Bare-metal vs Linux workload
     if args.bare_metal:
@@ -185,8 +292,9 @@ def create(args):
             workload=ArmFsLinux(object_file=args.kernel),
         )
 
-    # CPU cluster (boot CPUs)
-    boot_cluster_sizes = [args.num_cpus]
+    # The stable checkpoint/restore CPU names are system.cpu_cluster.cpus*.
+    # In KVM boot mode these are the target CPUs, initially switched out.
+    cluster_sizes = [args.num_cpus]
 
     system.cpu_cluster = [
         devices.ArmCpuCluster(
@@ -194,13 +302,17 @@ def create(args):
             cluster_cpus,
             args.cpu_freq,
             "1.0V",
-            boot_cpu_class,
+            target_cpu_class,
             None,  # L1I handled by Ruby/CHI
             None,  # L1D handled by Ruby/CHI
             None,  # L2 handled by Ruby/CHI
         )
-        for cluster_cpus in boot_cluster_sizes
+        for cluster_cpus in cluster_sizes
     ]
+
+    if use_switch_boot:
+        _set_target_cpus_switched_out(system, True)
+
     _set_cpu_heartbeat(system, args.heartbeat_insts)
 
     # PCI VirtIO block device (optional, for disk image)
@@ -217,12 +329,12 @@ def create(args):
         for cpu in cluster.cpus:
             cpus.append(cpu)
 
-    if use_timing_boot and target_cpu_class is not boot_cpu_class:
-        switch_cpus = _make_switch_cpus(
+    if use_switch_boot:
+        boot_cpus = _make_boot_cpus(
             system,
-            target_cpu_class,
+            boot_cpu_class,
+            cpus,
             args.heartbeat_insts,
-            switched_out=True,
         )
 
     system.attach_io()
@@ -236,7 +348,20 @@ def create(args):
         system.realview.bootmem,
         cpus,
     )
-    system._ruby_cpu_port_targets = cpus
+    if use_switch_boot:
+        system._ruby_cpu_port_targets = boot_cpus
+    else:
+        system._ruby_cpu_port_targets = cpus
+    system.ruby.skip_cache_checkpoint_flush = (
+        args.skip_ruby_cache_checkpoint_flush
+    )
+
+    if _is_kvm_cpu(boot_cpu_class):
+        _configure_kvm(system, boot_cpus, cpus)
+    else:
+        if _uses_restore(args):
+            system.release = ArmDefaultRelease.for_kvm()
+        _configure_cpu_affinity(system, cpus)
 
     block_size_bits = int(math.log(args.cacheline_size, 2))
     if (1 << block_size_bits) != args.cacheline_size:
@@ -343,7 +468,7 @@ def create(args):
         if args.initrd:
             kernel_cmd.append("rdinit=/init")
         kernel_cmd.append("gem5_m5ops_mmio=1")
-        if use_timing_boot:
+        if use_switch_boot:
             kernel_cmd.append("gem5_roi_checkpoint=1")
         kernel_cmd.append("iomem=relaxed")
 
@@ -362,12 +487,16 @@ def run(args, root):
         exit_msg = event.getCause()
 
         if exit_msg == "checkpoint":
-            if not hasattr(root.system, "switch_cpus") or roi_switched:
+            if not hasattr(root.system, "boot_cpus") or roi_switched:
                 m5.fatal("unexpected checkpoint event")
-            print("ROI reached; switching from timing CPU to %s CPU @ tick %d"
-                  % (args.cpu, m5.curTick()))
+            old_cpu_name = type(_get_boot_cpus(root.system)[0]).__name__
+            print("ROI reached; switching from %s to %s CPU @ tick %d"
+                  % (old_cpu_name, args.cpu, m5.curTick()))
             m5.switchCpus(root.system, _get_switch_cpu_list(root.system))
             roi_switched = True
+            if args.checkpoint_at_switch:
+                _checkpoint_at_switch(args.checkpoint_at_switch)
+                sys.exit(0)
             m5.stats.reset()
             print("Stats reset after ROI CPU switch @ tick %d" % m5.curTick())
             continue
@@ -416,6 +545,15 @@ def main():
     parser.add_argument("--heartbeat-insts", type=int, default=0,
                         help="Print a per-core heartbeat every N committed "
                              "instructions on timing/o3 CPUs; 0 disables")
+    parser.add_argument("--checkpoint-at-switch", type=str, default=None,
+                        help="Save a checkpoint immediately after KVM-to-CPU "
+                             "switch and exit.")
+    parser.add_argument("--restore", type=str, default=None,
+                        help="Restore from a checkpoint directory.")
+    parser.add_argument("--skip-ruby-cache-checkpoint-flush",
+                        action="store_true",
+                        help="For checkpoint-at-switch only: serialize Ruby "
+                             "without memWriteback/cache trace.")
 
     # Memory
     parser.add_argument("--mem-type", default="DDR5_4400_4x8",
@@ -468,6 +606,9 @@ def main():
         parser.error("--num-cpus only supports 4, 16, or 32")
     if args.heartbeat_insts < 0:
         parser.error("--heartbeat-insts must be a non-negative integer")
+    if args.skip_ruby_cache_checkpoint_flush and not args.checkpoint_at_switch:
+        parser.error("--skip-ruby-cache-checkpoint-flush requires "
+                     "--checkpoint-at-switch")
     policy = resolve_amo_policy(
         args.amo_policy,
         args.l1d_amo_policy,
@@ -513,7 +654,12 @@ def main():
     root = Root(full_system=True)
     root.system = create(args)
 
-    m5.instantiate()
+    _configure_kvm_quantum(root)
+
+    if args.restore:
+        m5.instantiate(args.restore)
+    else:
+        m5.instantiate()
 
     run(args, root)
 

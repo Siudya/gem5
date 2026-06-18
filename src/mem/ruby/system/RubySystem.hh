@@ -81,7 +81,6 @@ class RubySystem : public ClockedObject
     bool getCooldownEnabled() { return m_cooldown_enabled; }
     bool getCustomRouteTableEnabled() const
     { return m_enable_custom_route_table; }
-
     memory::SimpleMemory *getPhysMem() { return m_phys_mem; }
     Cycles getStartCycle() { return m_start_cycle; }
     bool getAccessBackingStore() { return m_access_backing_store; }
@@ -215,6 +214,7 @@ class RubySystem : public ClockedObject
     memory::SimpleMemory *m_phys_mem;
     const bool m_access_backing_store;
     const bool m_skip_warmup_restore;
+    const bool m_skip_cache_checkpoint_flush;
     const bool m_enable_custom_route_table;
 
     //std::vector<Network *> m_networks;

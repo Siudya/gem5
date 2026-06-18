@@ -44,6 +44,7 @@
 #include <zlib.h>
 
 #include <cstdio>
+#include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <list>
@@ -74,6 +75,7 @@ namespace ruby
 RubySystem::RubySystem(const Params &p)
     : ClockedObject(p), m_access_backing_store(p.access_backing_store),
       m_skip_warmup_restore(p.skip_warmup_restore),
+      m_skip_cache_checkpoint_flush(p.skip_cache_checkpoint_flush),
       m_enable_custom_route_table(p.enable_custom_route_table),
       m_cache_recorder(NULL)
 {
@@ -594,8 +596,21 @@ RubySystem::serialize(CheckpointOut &cp) const
     // be up-to-date and the simulation will probably fail when restoring
     // from the checkpoint.
     if (m_cache_recorder == NULL) {
-        fatal("Call memWriteback() before serialize() to create"
-                "ruby trace");
+        if (!m_skip_cache_checkpoint_flush) {
+            fatal("Call memWriteback() before serialize() to create"
+                    "ruby trace");
+        }
+        const std::string cache_trace_file = name() + ".cache.gz";
+        std::ofstream trace((CheckpointIn::dir() + "/" + cache_trace_file),
+                            std::ios::binary);
+        if (!trace.good()) {
+            fatal("Unable to create empty Ruby cache trace file '%s'\n",
+                  cache_trace_file);
+        }
+        uint64_t cache_trace_size = 0;
+        SERIALIZE_SCALAR(cache_trace_file);
+        SERIALIZE_SCALAR(cache_trace_size);
+        return;
     }
 
     // Aggregate the trace entries together into a single array
@@ -676,6 +691,10 @@ RubySystem::unserialize(CheckpointIn &cp)
 
     UNSERIALIZE_SCALAR(cache_trace_file);
     UNSERIALIZE_SCALAR(cache_trace_size);
+    if (cache_trace_size == 0) {
+        m_warmup_enabled = false;
+        return;
+    }
     cache_trace_file = cp.getCptDir() + "/" + cache_trace_file;
 
     readCompressedTrace(cache_trace_file, uncompressed_trace,

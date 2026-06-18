@@ -60,6 +60,10 @@ class RubySystem(ClockedObject):
         False,
         "Skip Ruby cache-trace warmup during checkpoint restore",
     )
+    skip_cache_checkpoint_flush = Param.Bool(
+        False,
+        "Serialize Ruby without a cache trace; only valid when Ruby caches are clean",
+    )
     enable_custom_route_table = Param.Bool(
         False,
         "Use the global Ruby custom route table for CHI address routing",

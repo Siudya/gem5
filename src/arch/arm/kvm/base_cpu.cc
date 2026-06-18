@@ -103,6 +103,9 @@ BaseArmKvmCPU::startup()
     memset(&target_config, 0, sizeof(target_config));
 
     vm->kvmArmPreferredTarget(target_config);
+    target_config.features[0] |= (1 << KVM_ARM_VCPU_PSCI_0_2);
+    if (vcpuID != 0)
+        target_config.features[0] |= (1 << KVM_ARM_VCPU_POWER_OFF);
     if (!((ArmSystem *)system)->highestELIs64()) {
         target_config.features[0] |= (1 << KVM_ARM_VCPU_EL1_32BIT);
     }
@@ -144,6 +147,19 @@ BaseArmKvmCPU::kvmRun(Tick ticks)
 
     Tick kvmRunTicks = BaseKvmCPU::kvmRun(ticks);
 
+    // Check if it's the last vcpu back from KVM. If yes, it should save the
+    // virtual time. This runs after BaseKvmCPU::kvmRun has restored the CPU's
+    // event queue lock, so GenericTimer can safely migrate to its own eventq.
+    {
+        std::lock_guard<UncontendedMutex> l(vtime_mutex);
+        if (--vtime_counter == 0) {
+            getOneReg(KVM_REG_ARM_TIMER_CNT, &vtime);
+            static_cast<ArmSystem *>(system)
+                ->getGenericTimer()
+                ->syncSystemCounter(vtime);
+        }
+    }
+
     if (!vm->hasKernelIRQChip()) {
         uint64_t device_irq_level =
             getKvmRunState()->s.regs.device_irq_level;
@@ -178,17 +194,6 @@ BaseArmKvmCPU::ioctlRun()
             setOneReg(KVM_REG_ARM_TIMER_CNT, vtime);
     }
     BaseKvmCPU::ioctlRun();
-    // Check if it's the last vcpu back from KVM. If yes, it should save the
-    // virtual time.
-    {
-        std::lock_guard<UncontendedMutex> l(vtime_mutex);
-        if (--vtime_counter == 0) {
-            getOneReg(KVM_REG_ARM_TIMER_CNT, &vtime);
-            static_cast<ArmSystem *>(system)
-                ->getGenericTimer()
-                ->syncSystemCounter(vtime);
-        }
-    }
 }
 
 const BaseArmKvmCPU::RegIndexVector &

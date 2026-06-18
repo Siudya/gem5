@@ -38,6 +38,8 @@
 #ifndef __ARCH_ARM_KVM_GIC_HH__
 #define __ARCH_ARM_KVM_GIC_HH__
 
+#include <vector>
+
 #include "arch/arm/system.hh"
 #include "cpu/kvm/device.hh"
 #include "cpu/kvm/vm.hh"
@@ -81,6 +83,9 @@ class KvmKernelGic
     KvmKernelGic &operator=(const KvmKernelGic &rhs) = delete;
 
     virtual void init() {}
+
+    virtual Tick read(PacketPtr pkt);
+    virtual Tick write(PacketPtr pkt);
 
   public:
     /**
@@ -153,6 +158,9 @@ class KvmKernelGicV2 : public KvmKernelGic, public GicV2Registers
                    const MuxingKvmGicV2Params &params);
 
   public: // GicV2Registers
+    Tick read(PacketPtr pkt) override;
+    Tick write(PacketPtr pkt) override;
+
     uint32_t readDistributor(ContextID ctx, Addr daddr) override;
     uint32_t readCpu(ContextID ctx, Addr daddr) override;
 
@@ -206,6 +214,9 @@ class KvmKernelGicV3 : public KvmKernelGic, public Gicv3Registers
     void init() override;
 
   public: // Gicv3Registers
+    Tick read(PacketPtr pkt) override;
+    Tick write(PacketPtr pkt) override;
+
     uint32_t readDistributor(Addr daddr) override;
     uint32_t readRedistributor(const ArmISA::Affinity &aff,
                                Addr daddr) override;
@@ -219,6 +230,11 @@ class KvmKernelGicV3 : public KvmKernelGic, public Gicv3Registers
                   ArmISA::MiscRegIndex misc_reg, RegVal data) override;
 
   protected:
+    uint32_t readRedistributorWaker(Addr addr) const;
+    void writeRedistributorWaker(Addr addr, uint32_t data);
+    uint64_t readRedistributorTyper(Addr addr) const;
+    const ArmISA::Affinity redistributorAffinity(Addr addr) const;
+
     /**
      * Get value of GIC register "from" a cpu
      *
@@ -242,6 +258,11 @@ class KvmKernelGicV3 : public KvmKernelGic, public Gicv3Registers
                    Arg value);
 
   private:
+    /** System this interrupt controller belongs to */
+    ArmSystem &system;
+    /** Address stride between redistributors in guest physical memory */
+    const Addr redistSize;
+    std::vector<uint32_t> redistributorWaker;
     /** Address range for the redistributor */
     const AddrRange redistRange;
     /** Address range for the distributor */

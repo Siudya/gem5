@@ -1567,14 +1567,15 @@ class VExpress_GEM5_Base(RealView):
         system = self.system.unproxy(self)
         if system._have_psci:
             # PSCI functions exposed to the kernel
-            if not system.release.has(ArmExtension("SECURITY")):
+            have_kvm = "kvm_vm" in system._children
+            if not have_kvm and not system.release.has(ArmExtension("SECURITY")):
                 raise AssertionError("PSCI requires EL3 (have_security)")
 
             psci_node = FdtNode("psci")
             psci_node.appendCompatible(
                 ["arm,psci-1.0", "arm,psci-0.2", "arm,psci"]
             )
-            method = "smc"
+            method = "hvc" if have_kvm else "smc"
             psci_node.append(FdtPropertyStrings("method", method))
             psci_node.append(FdtPropertyWords("cpu_suspend", 0xC4000001))
             psci_node.append(FdtPropertyWords("cpu_off", 0x84000002))

@@ -41,8 +41,12 @@
 
 #include "arch/arm/kvm/base_cpu.hh"
 #include "arch/arm/regs/misc.hh"
+#include "arch/arm/utility.hh"
+#include "base/bitfield.hh"
 #include "debug/GIC.hh"
 #include "debug/Interrupt.hh"
+#include "dev/arm/gic_v3_redistributor.hh"
+#include "mem/packet_access.hh"
 #include "params/MuxingKvmGicV2.hh"
 
 namespace gem5
@@ -61,6 +65,18 @@ KvmKernelGic::KvmKernelGic(KvmVM &_vm, uint32_t dev, unsigned it_lines)
 
 KvmKernelGic::~KvmKernelGic()
 {
+}
+
+Tick
+KvmKernelGic::read(PacketPtr pkt)
+{
+    panic("KvmKernelGic: PIO read is unsupported\n");
+}
+
+Tick
+KvmKernelGic::write(PacketPtr pkt)
+{
+    panic("KvmKernelGic: PIO write is unsupported\n");
 }
 
 void
@@ -155,6 +171,67 @@ KvmKernelGicV2::setGicReg(unsigned group, unsigned vcpu, unsigned offset,
     kdev.setAttrPtr(group, attr, &reg);
 }
 
+Tick
+KvmKernelGicV2::read(PacketPtr pkt)
+{
+    const Addr addr = pkt->getAddr();
+    const size_t size = pkt->getSize();
+    panic_if(size != 1 && size != 2 && size != 4,
+             "Invalid GICv2 KVM PIO read size %d\n", size);
+
+    const ContextID ctx = pkt->req->contextId();
+    uint32_t word = 0;
+
+    if (distRange.contains(addr)) {
+        const Addr daddr = addr - distRange.start();
+        word = readDistributor(ctx, daddr & ~0x3);
+    } else if (cpuRange.contains(addr)) {
+        const Addr daddr = addr - cpuRange.start();
+        word = readCpu(ctx, daddr & ~0x3);
+    } else {
+        panic("KvmKernelGicV2::read(): unknown address %#x\n", addr);
+    }
+
+    const uint64_t resp = (word >> ((addr & 0x3) * 8)) &
+        mask(size * 8);
+    pkt->setUintX(resp, ByteOrder::little);
+    pkt->makeAtomicResponse();
+    return 0;
+}
+
+Tick
+KvmKernelGicV2::write(PacketPtr pkt)
+{
+    const Addr addr = pkt->getAddr();
+    const size_t size = pkt->getSize();
+    panic_if(size != 1 && size != 2 && size != 4,
+             "Invalid GICv2 KVM PIO write size %d\n", size);
+
+    const ContextID ctx = pkt->req->contextId();
+    const uint32_t data = pkt->getUintX(ByteOrder::little);
+    const unsigned shift = (addr & 0x3) * 8;
+    const uint32_t data_mask = mask(size * 8) << shift;
+
+    if (distRange.contains(addr)) {
+        const Addr daddr = addr - distRange.start();
+        const Addr word_addr = daddr & ~0x3;
+        uint32_t word = readDistributor(ctx, word_addr);
+        word = (word & ~data_mask) | ((data << shift) & data_mask);
+        writeDistributor(ctx, word_addr, word);
+    } else if (cpuRange.contains(addr)) {
+        const Addr daddr = addr - cpuRange.start();
+        const Addr word_addr = daddr & ~0x3;
+        uint32_t word = readCpu(ctx, word_addr);
+        word = (word & ~data_mask) | ((data << shift) & data_mask);
+        writeCpu(ctx, word_addr, word);
+    } else {
+        panic("KvmKernelGicV2::write(): unknown address %#x\n", addr);
+    }
+
+    pkt->makeAtomicResponse();
+    return 0;
+}
+
 uint32_t
 KvmKernelGicV2::readDistributor(ContextID ctx, Addr daddr)
 {
@@ -187,10 +264,18 @@ KvmKernelGicV2::writeCpu(ContextID ctx, Addr daddr, uint32_t data)
 #define SZ_64K 0x00000040
 #endif
 
+constexpr Addr Gicv3RedistRegionSize = 0x2000000;
+constexpr uint32_t GicrWakerProcessorSleep = 1 << 1;
+constexpr uint32_t GicrWakerChildrenAsleep = 1 << 2;
+
 KvmKernelGicV3::KvmKernelGicV3(KvmVM &_vm,
                                const MuxingKvmGicV3Params &p)
     : KvmKernelGic(_vm, KVM_DEV_TYPE_ARM_VGIC_V3, p.it_lines),
-      redistRange(RangeSize(p.redist_addr, KVM_VGIC_V3_REDIST_SIZE)),
+      system(*static_cast<ArmSystem *>(p.system)),
+      redistSize(p.gicv4 ? 0x40000 : KVM_VGIC_V3_REDIST_SIZE),
+      redistributorWaker(p.cpu_max,
+          GicrWakerProcessorSleep | GicrWakerChildrenAsleep),
+      redistRange(RangeSize(p.redist_addr, Gicv3RedistRegionSize)),
       distRange(RangeSize(p.dist_addr, KVM_VGIC_V3_DIST_SIZE))
 {
     kdev.setAttr<uint64_t>(
@@ -234,6 +319,64 @@ KvmKernelGicV3::setGicReg(unsigned group, unsigned mpidr, unsigned offset,
         (offset << KVM_DEV_ARM_VGIC_OFFSET_SHIFT));
 
     kdev.setAttrPtr(group, attr, &reg);
+}
+
+const ArmISA::Affinity
+KvmKernelGicV3::redistributorAffinity(Addr addr) const
+{
+    const Addr redist_addr = addr - redistRange.start();
+    const Addr redistributor_id = redist_addr / redistSize;
+
+    panic_if(redistributor_id >= system.threads.size(),
+             "Invalid GICv3 redistributor_id %d\n", redistributor_id);
+
+    return ArmISA::getAffinity(&system, system.threads[redistributor_id]);
+}
+
+uint64_t
+KvmKernelGicV3::readRedistributorTyper(Addr addr) const
+{
+    const Addr redist_addr = addr - redistRange.start();
+    const Addr redistributor_id = redist_addr / redistSize;
+
+    panic_if(redistributor_id >= system.threads.size(),
+             "Invalid GICv3 redistributor_id %d\n", redistributor_id);
+
+    const auto aff = ArmISA::getAffinity(
+        &system, system.threads[redistributor_id]);
+    const bool last = redistributor_id == system.threads.size() - 1;
+
+    return ((uint64_t)aff << 32) | (redistributor_id << 8) |
+        (uint64_t)(last ? 1 : 0) << 4;
+}
+
+uint32_t
+KvmKernelGicV3::readRedistributorWaker(Addr addr) const
+{
+    const Addr redist_addr = addr - redistRange.start();
+    const Addr redistributor_id = redist_addr / redistSize;
+
+    panic_if(redistributor_id >= redistributorWaker.size(),
+             "Invalid GICv3 redistributor_id %d\n", redistributor_id);
+
+    return redistributorWaker[redistributor_id];
+}
+
+void
+KvmKernelGicV3::writeRedistributorWaker(Addr addr, uint32_t data)
+{
+    const Addr redist_addr = addr - redistRange.start();
+    const Addr redistributor_id = redist_addr / redistSize;
+
+    panic_if(redistributor_id >= redistributorWaker.size(),
+             "Invalid GICv3 redistributor_id %d\n", redistributor_id);
+
+    if (data & GicrWakerProcessorSleep) {
+        redistributorWaker[redistributor_id] =
+            GicrWakerProcessorSleep | GicrWakerChildrenAsleep;
+    } else {
+        redistributorWaker[redistributor_id] = 0;
+    }
 }
 
 uint32_t
@@ -289,6 +432,111 @@ KvmKernelGicV3::writeCpu(const ArmISA::Affinity &aff,
     panic_if(!sys_reg.has_value(), "Invalid system register");
     setGicReg<RegVal>(KVM_DEV_ARM_VGIC_GRP_CPU_SYSREGS, aff,
                       sys_reg.value().packed(), data);
+}
+
+Tick
+KvmKernelGicV3::read(PacketPtr pkt)
+{
+    const Addr addr = pkt->getAddr();
+    const size_t size = pkt->getSize();
+    panic_if(size != 1 && size != 2 && size != 4 && size != 8,
+             "Invalid GICv3 KVM PIO read size %d\n", size);
+
+    uint64_t resp = 0;
+
+    if (distRange.contains(addr)) {
+        const Addr daddr = addr - distRange.start();
+        const Addr word_addr = daddr & ~0x3;
+        const uint32_t lo = readDistributor(word_addr);
+        if (size == 8) {
+            const uint32_t hi = readDistributor(word_addr + 4);
+            resp = (uint64_t)hi << 32 | lo;
+        } else {
+            resp = (lo >> ((daddr & 0x3) * 8)) & mask(size * 8);
+        }
+    } else if (redistRange.contains(addr)) {
+        const Addr daddr = (addr - redistRange.start()) % redistSize;
+        const Addr word_addr = daddr & ~0x3;
+        const ArmISA::Affinity aff = redistributorAffinity(addr);
+        const bool read_typer = word_addr == 0x8 || word_addr == 0xc;
+        const bool read_waker = word_addr == 0x14;
+        const uint32_t lo = read_typer ?
+            readRedistributorTyper(addr) >> ((word_addr - 0x8) * 8) :
+            read_waker ?
+            readRedistributorWaker(addr) :
+            readRedistributor(aff, word_addr);
+        if (size == 8) {
+            const uint32_t hi = read_typer ?
+                readRedistributorTyper(addr) >> 32 :
+                readRedistributor(aff, word_addr + 4);
+            resp = (uint64_t)hi << 32 | lo;
+        } else {
+            resp = (lo >> ((daddr & 0x3) * 8)) & mask(size * 8);
+        }
+    } else {
+        panic("KvmKernelGicV3::read(): unknown address %#x\n", addr);
+    }
+
+    pkt->setUintX(resp, ByteOrder::little);
+    pkt->makeAtomicResponse();
+    return 0;
+}
+
+Tick
+KvmKernelGicV3::write(PacketPtr pkt)
+{
+    const Addr addr = pkt->getAddr();
+    const size_t size = pkt->getSize();
+    panic_if(size != 1 && size != 2 && size != 4 && size != 8,
+             "Invalid GICv3 KVM PIO write size %d\n", size);
+
+    const uint64_t data = pkt->getUintX(ByteOrder::little);
+
+    if (distRange.contains(addr)) {
+        const Addr daddr = addr - distRange.start();
+        const Addr word_addr = daddr & ~0x3;
+        if (size == 8) {
+            writeDistributor(word_addr, data & mask(32));
+            writeDistributor(word_addr + 4, data >> 32);
+        } else {
+            const unsigned shift = (daddr & 0x3) * 8;
+            const uint32_t data_mask = mask(size * 8) << shift;
+            uint32_t word = readDistributor(word_addr);
+            word = (word & ~data_mask) |
+                (((uint32_t)data << shift) & data_mask);
+            writeDistributor(word_addr, word);
+        }
+    } else if (redistRange.contains(addr)) {
+        const Addr daddr = (addr - redistRange.start()) % redistSize;
+        const Addr word_addr = daddr & ~0x3;
+        const ArmISA::Affinity aff = redistributorAffinity(addr);
+        if (word_addr == 0x14) {
+            const unsigned shift = (daddr & 0x3) * 8;
+            const uint32_t data_mask = mask(size * 8) << shift;
+            uint32_t word = readRedistributorWaker(addr);
+            word = (word & ~data_mask) |
+                (((uint32_t)data << shift) & data_mask);
+            writeRedistributorWaker(addr, word);
+            pkt->makeAtomicResponse();
+            return 0;
+        }
+        if (size == 8) {
+            writeRedistributor(aff, word_addr, data & mask(32));
+            writeRedistributor(aff, word_addr + 4, data >> 32);
+        } else {
+            const unsigned shift = (daddr & 0x3) * 8;
+            const uint32_t data_mask = mask(size * 8) << shift;
+            uint32_t word = readRedistributor(aff, word_addr);
+            word = (word & ~data_mask) |
+                (((uint32_t)data << shift) & data_mask);
+            writeRedistributor(aff, word_addr, word);
+        }
+    } else {
+        panic("KvmKernelGicV3::write(): unknown address %#x\n", addr);
+    }
+
+    pkt->makeAtomicResponse();
+    return 0;
 }
 
 template <class Types>
@@ -355,7 +603,7 @@ MuxingKvmGic<Types>::read(PacketPtr pkt)
     if (!usingKvm)
         return SimGic::read(pkt);
 
-    panic("MuxingKvmGic: PIO from gem5 is currently unsupported\n");
+    return kernelGic->read(pkt);
 }
 
 template <class Types>
@@ -365,7 +613,7 @@ MuxingKvmGic<Types>::write(PacketPtr pkt)
     if (!usingKvm)
         return SimGic::write(pkt);
 
-    panic("MuxingKvmGic: PIO from gem5 is currently unsupported\n");
+    return kernelGic->write(pkt);
 }
 
 template <class Types>
