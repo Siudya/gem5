@@ -220,7 +220,7 @@ def create(args):
     system = System(
         cpu=[cpu_class(cpu_id=i) for i in range(args.num_cpus)],
         mem_mode=cpu_class.memory_mode(),
-        mem_ranges=[AddrRange(args.mem_size)],
+        mem_ranges=[AddrRange(start=0x200000000, size=args.mem_size)],
         cache_line_size=args.cacheline_size,
     )
 

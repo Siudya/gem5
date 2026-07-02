@@ -292,6 +292,8 @@ def create(args):
             workload=ArmFsLinux(object_file=args.kernel),
         )
 
+    system.mem_ranges = [AddrRange(start=0x200000000, size=args.mem_size)]
+
     # The stable checkpoint/restore CPU names are system.cpu_cluster.cpus*.
     # In KVM boot mode these are the target CPUs, initially switched out.
     cluster_sizes = [args.num_cpus]
