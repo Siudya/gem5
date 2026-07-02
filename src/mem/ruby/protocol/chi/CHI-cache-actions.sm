@@ -1279,18 +1279,42 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
     tbe.ar_ds_dbid := true;
     tbe.ar_ds_wdat := true;
     tbe.ar_ds_ack  := true;
-    if (tbe.dir_sharers.count() == 0) {
-      // No snoops needed; data valid in cache.
+
+    bool loc_hit := tbe.dataValid;
+    bool us_dirty := tbe.dataMaybeDirtyUpstream;
+    bool shared  := tbe.dir_sharers.count() > 0;
+    bool matched := false;
+
+    // RU, RSD, RUSD, UD_RU, UC_RU, UD_RSD, SD_RSD
+    if (us_dirty && shared) {
+      tbe.ar_us_snp_snt := false;
+      tbe.ar_us_snp_rsp := false;
+      tbe.ar_us_snp_dat := false;
+      matched           := true;
+    }
+    // RSC, RUSC — no local data, clean sharers; fetch old value via snoop
+    if (!us_dirty && shared && !loc_hit) {
+      tbe.ar_us_snp_snt := false;
+      tbe.ar_us_snp_rsp := false;
+      tbe.ar_us_snp_dat := false;
+      matched           := true;
+    }
+    // UD, UC, SD, SC — local data, no sharers
+    if (!shared && loc_hit) {
       tbe.ar_us_snp_snt := true;
       tbe.ar_us_snp_rsp := true;
       tbe.ar_us_snp_dat := true;
-    } else if (tbe.dataMaybeDirtyUpstream) {
-      // Owner may have dirty data; must wait for SnpRespData.
-      tbe.ar_us_snp_dat := false;
-    } else {
-      // Sharers are clean; no dirty data expected.
-      tbe.ar_us_snp_dat := true;
+      matched           := true;
     }
+    // UD_RSC, UC_RSC, SD_RSC, SC_RSC — local data, clean sharers
+    if (!us_dirty && shared && loc_hit) {
+      tbe.ar_us_snp_snt := false;
+      tbe.ar_us_snp_rsp := false;
+      tbe.ar_us_snp_dat := true;
+      matched           := true;
+    }
+    assert(matched);
+
     tbe.actions.pushNB(Event:WriteFEPipe);
     tbe.expected_req_resp.setExpectedCount(999);
     Callback_Central_Atomic(tbe);
@@ -1362,21 +1386,48 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
     amoStats.incCentralize();
     tbe.central_ar := true;
     tbe.dataToBeInvalid := true;
-    // Data in HNF cache (dirty); no SNF fetch needed.
-    tbe.ar_ds_req  := true;
-    tbe.ar_ds_rdat := true;
     tbe.ar_ds_dbid := true;
     tbe.ar_ds_wdat := true;
     tbe.ar_ds_ack  := true;
-    if (tbe.dir_sharers.count() == 0) {
+
+    bool loc_hit := tbe.dataValid;
+    bool us_dirty := tbe.dataMaybeDirtyUpstream;
+    bool shared  := tbe.dir_sharers.count() > 0;
+    bool matched := false;
+
+    tbe.ar_ds_req  := true;
+    tbe.ar_ds_rdat := true;
+
+    // RU, RSD, RUSD — dirty upstream owner
+    if (us_dirty && shared) {
+      tbe.ar_us_snp_snt := false;
+      tbe.ar_us_snp_rsp := false;
+      tbe.ar_us_snp_dat := false;
+      matched           := true;
+    }
+    // RSC, RUSC — no local data, clean sharers; fetch old value via snoop
+    if (!us_dirty && shared && !loc_hit) {
+      tbe.ar_us_snp_snt := false;
+      tbe.ar_us_snp_rsp := false;
+      tbe.ar_us_snp_dat := false;
+      matched           := true;
+    }
+    // (unreachable for WriteBack — only R* states enter)
+    if (!shared && loc_hit) {
       tbe.ar_us_snp_snt := true;
       tbe.ar_us_snp_rsp := true;
       tbe.ar_us_snp_dat := true;
-    } else if (tbe.dataMaybeDirtyUpstream) {
-      tbe.ar_us_snp_dat := false;
-    } else {
-      tbe.ar_us_snp_dat := true;
+      matched           := true;
     }
+    // (unreachable for WriteBack)
+    if (!us_dirty && shared && loc_hit) {
+      tbe.ar_us_snp_snt := false;
+      tbe.ar_us_snp_rsp := false;
+      tbe.ar_us_snp_dat := true;
+      matched           := true;
+    }
+    assert(matched);
+
     tbe.actions.pushNB(Event:WriteFEPipe);
     tbe.expected_req_resp.setExpectedCount(999);
     Callback_Central_Atomic(tbe);
@@ -1667,15 +1718,12 @@ action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
   if (delegato_migrate == false) {
     amoStats.incCentralize();
     tbe.central_ar := true;
-    // HNF cache miss: any upstream sharer/owner can supply the old value via
-    // snoop data; otherwise Callback_Central_Atomic fetches SNF.
-    bool no_sharer := tbe.dir_sharers.isEmpty();
-    bool data_from_snoop := !no_sharer;
-    tbe.ar_us_snp_snt := no_sharer;
-    tbe.ar_us_snp_rsp := no_sharer;
-    tbe.ar_us_snp_dat := no_sharer;
-    tbe.ar_ds_req := data_from_snoop;
-    tbe.ar_ds_rdat := data_from_snoop;
+    // State I: no directory entry, no sharers. Fetch old value from SNF.
+    tbe.ar_us_snp_snt := true;
+    tbe.ar_us_snp_rsp := true;
+    tbe.ar_us_snp_dat := true;
+    tbe.ar_ds_req  := false;
+    tbe.ar_ds_rdat := false;
     tbe.ar_ds_dbid := true;
     tbe.ar_ds_wdat := true;
     tbe.ar_ds_ack  := true;
@@ -1707,13 +1755,12 @@ action(Initiate_AtomicReturn_Miss, desc="") {
     amoStats.incCentralize();
     tbe.central_ar := true;
     tbe.dataToBeInvalid := true;
-    bool no_sharer := tbe.dir_sharers.isEmpty();
-    bool data_from_snoop := !no_sharer;
-    tbe.ar_us_snp_snt := no_sharer;
-    tbe.ar_us_snp_rsp := no_sharer;
-    tbe.ar_us_snp_dat := no_sharer;
-    tbe.ar_ds_req := data_from_snoop;
-    tbe.ar_ds_rdat := data_from_snoop;
+    // State I: no directory entry, no sharers. Fetch old value from SNF.
+    tbe.ar_us_snp_snt := true;
+    tbe.ar_us_snp_rsp := true;
+    tbe.ar_us_snp_dat := true;
+    tbe.ar_ds_req  := false;
+    tbe.ar_ds_rdat := false;
     tbe.ar_ds_dbid := true;
     tbe.ar_ds_wdat := true;
     tbe.ar_ds_ack  := true;
