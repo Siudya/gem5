@@ -130,6 +130,7 @@ class RubySystem : public ClockedObject
     const std::string &routeMachineRole(const MachineID &machine) const;
     bool shouldRouteAddressToAAN(
         Addr addr, const MachineID &requester) const;
+    bool isAANOwner(Addr addr, const MachineID &owner) const;
 
   private:
     // Private copy constructor and assignment operator

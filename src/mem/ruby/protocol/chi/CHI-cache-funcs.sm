@@ -55,6 +55,7 @@ MachineID mapAddressToDownstreamMachine(Addr addr);
 MachineID mapAddressToMachine(Addr addr, MachineType mtype);
 MachineID mapAddressToAtomicReturnMachine(Addr addr);
 bool shouldRouteAddressToAAN(Addr addr);
+bool isAANOwner(Addr addr, MachineID owner);
 
 void incomingTransactionStart(Addr, Event, State, bool);
 void incomingTransactionEnd(Addr, State);
@@ -98,9 +99,13 @@ int decideHnfAMOAction(Addr addr, TBE tbe, int dir_case) {
   } else if (hnf_amo_policy == 5) {
     return delegatoPT.decideAction(addr, requestor_id, dir_case, owner_id);
   } else if (hnf_amo_policy == 6) {
-    // pa (pinned AAN): delegate when AAN holds the line, else centralize.
-    // dir_case==3 means the line is not present at the AAN (DIR_I).
-    if (shouldRouteAddressToAAN(addr) && (dir_case != 3)) {
+    // pa (pinned AAN): delegate when the AAN this address maps to is the
+    // current exclusive owner, else centralize. The requester-side dispatch
+    // predicate (shouldRouteAddressToAAN) must not be used here: evaluated
+    // at the HN-F it fails its RNF-role and cross-chiplet checks and is
+    // identically false.
+    if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl &&
+        isAANOwner(addr, tbe.dir_owner)) {
       return 1; // delegate
     }
     return 0; // central

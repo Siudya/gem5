@@ -344,6 +344,18 @@ RubySystem::shouldRouteAddressToAAN(
     return machineChiplet(requester) != machineChiplet(hnf);
 }
 
+bool
+RubySystem::isAANOwner(Addr addr, const MachineID &owner) const
+{
+    // True iff the AAN that the address maps to is exactly `owner`.
+    // Miss-safe: addresses outside the AAN table (or with the custom route
+    // table disabled) never have an AAN owner.
+    if (!m_enable_custom_route_table || !routeTable.contains("AAN", addr)) {
+        return false;
+    }
+    return nodeIdToMachineID(routeTable.query("AAN", addr)) == owner;
+}
+
 void
 RubySystem::registerNetwork(Network* network_ptr)
 {

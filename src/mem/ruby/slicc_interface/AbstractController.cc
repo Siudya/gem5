@@ -520,6 +520,12 @@ AbstractController::shouldRouteAddressToAAN(Addr addr) const
     return m_ruby_system->shouldRouteAddressToAAN(addr, m_machineID);
 }
 
+bool
+AbstractController::isAANOwner(Addr addr, const MachineID &owner) const
+{
+    return m_ruby_system->isAANOwner(addr, owner);
+}
+
 MachineID
 AbstractController::mapAddressToAtomicReturnMachine(Addr addr) const
 {

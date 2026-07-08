@@ -233,6 +233,7 @@ class AbstractController : public ClockedObject, public Consumer
                                     MachineType mtype = MachineType_NUM) const;
     MachineID mapAddressToAtomicReturnMachine(Addr addr) const;
     bool shouldRouteAddressToAAN(Addr addr) const;
+    bool isAANOwner(Addr addr, const MachineID &owner) const;
 
   private:
     MachineID mapAddressToConfiguredDownstreamMachine(
