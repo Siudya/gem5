@@ -68,18 +68,18 @@ NODE_ID_BASE = {
 OPTIONAL_ROUTE_NODE_IDS = (NODE_ID_BASE["BOOT_SNF"],)
 
 # Address allocation scheme:
-#   Die bit: PA[33] -> 8 GiB interleave between Die 0 and Die 1
-#   HNF: PA[33]+PA[9:6] (5 bits, 32-way interleave across both dies)
-#   SNF: PA[33]+PA[9:8] (3 bits, 8-way interleave, PA[9:8]=row => same-row HNF→SNF)
-#   AAN: PA[33]+PA[9:8] (same as SNF, same-row proxy to remote die)
+#   Die bit: PA[10] -> 1 KiB (16 cacheline) interleave between Die 0 and Die 1
+#   HNF: PA[10]+PA[9:6] (5 bits, 32-way interleave across both dies)
+#   SNF: PA[10]+PA[9:8] (3 bits, 8-way interleave, PA[9:8]=row => same-row HNF→SNF)
+#   AAN: PA[10]+PA[9:8] (same as SNF, same-row proxy to remote die)
 #   Cacheline interleaving: PA[5:0] not in masks (64B cacheline)
-HNF_MASK = 0x2_0000_03C0
-SNF_MASK = 0x2_0000_0300
-AAN_MASK = 0x2_0000_0300
+HNF_MASK = 0x7C0
+SNF_MASK = 0x700
+AAN_MASK = 0x700
 
 # Helper functions to compute interleaving match values.
 # Change _DIE_BIT, _HNF_SHIFT, _SNF_SHIFT to adjust the bit layout.
-_DIE_BIT = 33
+_DIE_BIT = 10
 _HNF_SHIFT = 6           # PA[9:6]
 _SNF_SHIFT = 8           # PA[9:8]
 

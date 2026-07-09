@@ -648,6 +648,9 @@ def main():
     args.chi_config = noc_config
     args.network = "garnet"
     args.ruby_clock = "2GHz"
+    # Keep in sync with delegato_se.py: 32B intra-chiplet flits, 64B D2D
+    # links via SerDes bridges (see CustomMesh).
+    args.link_width_bits = 256
     args.enable_custom_route_table = True
     configure_system_route_helpers(
         args, args.chi_config, single_die=(args.num_cpus == 4)

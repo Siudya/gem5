@@ -120,6 +120,11 @@ def _configure_topology(args, parser):
     )
     args.network = "garnet"
     args.ruby_clock = "2GHz"
+    # 256-bit (32B) links inside each chiplet; the D2D links are widened
+    # to 64B via SerDes bridges in CustomMesh. Per-direction D2D
+    # bandwidth: 4 links x 64B x 2GHz = 512 GB/s (Grace NVLink-C2C
+    # class, cf. Delegato's 450 GB/s).
+    args.link_width_bits = 256
     args.enable_custom_route_table = True
     configure_system_route_helpers(
         args, args.chi_config, single_die=(args.num_cpus == 4)

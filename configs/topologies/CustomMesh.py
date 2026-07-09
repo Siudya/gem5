@@ -72,28 +72,46 @@ class CustomMesh(SimpleTopology):
         # then east/west on the target row.
         link_weights = [2, 2, 1, 1]
 
+        def make_link(src, dst, dst_inport, weight):
+            is_cross = (src, dst) in cross_links
+            if is_cross:
+                # Cross-chiplet (D2D) link: 64B flits, reached through
+                # SerDes bridges at both ends that convert from the 32B
+                # intra-chiplet flit width (die-boundary PHY). Bridges are
+                # auto-created in Network.py when the serdes flags are set;
+                # router-side width stays at ni_flit_size. NOTE: despite
+                # the Param docstring, link width units are bytes
+                # (ni_flit_size is in bytes).
+                link = IntLink(
+                    link_id=self._link_count,
+                    src_node=self._routers[src],
+                    dst_node=self._routers[dst],
+                    dst_inport=dst_inport,
+                    latency=cross_link_latency,
+                    weight=weight,
+                    width=64,
+                    src_serdes=True,
+                    dst_serdes=True,
+                )
+            else:
+                link = IntLink(
+                    link_id=self._link_count,
+                    src_node=self._routers[src],
+                    dst_node=self._routers[dst],
+                    dst_inport=dst_inport,
+                    latency=link_latency,
+                    weight=weight,
+                )
+            self._int_links.append(link)
+            self._link_count += 1
+
         # East output to West input links
         for row in range(num_rows):
             for col in range(num_columns):
                 if col + 1 < num_columns:
                     east_out = col + (row * num_columns)
                     west_in = (col + 1) + (row * num_columns)
-                    llat = (
-                        cross_link_latency
-                        if (east_out, west_in) in cross_links
-                        else link_latency
-                    )
-                    self._int_links.append(
-                        IntLink(
-                            link_id=self._link_count,
-                            src_node=self._routers[east_out],
-                            dst_node=self._routers[west_in],
-                            dst_inport="West",
-                            latency=llat,
-                            weight=link_weights[0],
-                        )
-                    )
-                    self._link_count += 1
+                    make_link(east_out, west_in, "West", link_weights[0])
 
         # West output to East input links
         for row in range(num_rows):
@@ -101,22 +119,7 @@ class CustomMesh(SimpleTopology):
                 if col + 1 < num_columns:
                     east_in = col + (row * num_columns)
                     west_out = (col + 1) + (row * num_columns)
-                    llat = (
-                        cross_link_latency
-                        if (west_out, east_in) in cross_links
-                        else link_latency
-                    )
-                    self._int_links.append(
-                        IntLink(
-                            link_id=self._link_count,
-                            src_node=self._routers[west_out],
-                            dst_node=self._routers[east_in],
-                            dst_inport="East",
-                            latency=llat,
-                            weight=link_weights[1],
-                        )
-                    )
-                    self._link_count += 1
+                    make_link(west_out, east_in, "East", link_weights[1])
 
         # North output to South input links
         for col in range(num_columns):
@@ -124,22 +127,7 @@ class CustomMesh(SimpleTopology):
                 if row + 1 < num_rows:
                     north_out = col + (row * num_columns)
                     south_in = col + ((row + 1) * num_columns)
-                    llat = (
-                        cross_link_latency
-                        if (north_out, south_in) in cross_links
-                        else link_latency
-                    )
-                    self._int_links.append(
-                        IntLink(
-                            link_id=self._link_count,
-                            src_node=self._routers[north_out],
-                            dst_node=self._routers[south_in],
-                            dst_inport="South",
-                            latency=llat,
-                            weight=link_weights[2],
-                        )
-                    )
-                    self._link_count += 1
+                    make_link(north_out, south_in, "South", link_weights[2])
 
         # South output to North input links
         for col in range(num_columns):
@@ -147,22 +135,7 @@ class CustomMesh(SimpleTopology):
                 if row + 1 < num_rows:
                     north_in = col + (row * num_columns)
                     south_out = col + ((row + 1) * num_columns)
-                    llat = (
-                        cross_link_latency
-                        if (south_out, north_in) in cross_links
-                        else link_latency
-                    )
-                    self._int_links.append(
-                        IntLink(
-                            link_id=self._link_count,
-                            src_node=self._routers[south_out],
-                            dst_node=self._routers[north_in],
-                            dst_inport="North",
-                            latency=llat,
-                            weight=link_weights[3],
-                        )
-                    )
-                    self._link_count += 1
+                    make_link(south_out, north_in, "North", link_weights[3])
 
     # --------------------------------------------------------------------------
     # distributeNodes
