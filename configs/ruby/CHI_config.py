@@ -315,6 +315,10 @@ class Base_CHI_Cache_Controller(CHI_Cache_Controller):
         # This should be set to true in the data cache controller to enable
         # timeouts on unique lines when a store conditional fails
         self.sc_lock_enabled = False
+        # Cycles charged by the local ALU for every atomic RMW executed at
+        # this controller (near L1/L2, centralized HN-F, delegated owner,
+        # and AAN alike). The SLICC default of 0 makes atomics compute-free.
+        self.atomic_op_latency = 3
 
 
 class CHI_L1Controller(Base_CHI_Cache_Controller):
