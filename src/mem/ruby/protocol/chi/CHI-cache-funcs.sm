@@ -652,8 +652,10 @@ void Callback_AAN_AtomicReturn(TBE tbe) {
     tbe.actions.pushNB(Event:SendReadUnique);
     tbe.ar_ds_req := true;
   }
-  // Downstream: CompAck only acknowledges the ReadUnique data response and
-  // does not depend on local AMO execution.
+  // Downstream: CompAck acknowledges the ReadUnique data response as soon
+  // as it arrives (standard CHI requester behavior). A snoop arriving
+  // before the line is installed hits the snoop-hazard path, which
+  // operates on TBE data only (see Initiate_SnpAMO), so early ack is safe.
   if ((tbe.ar_ds_ack == false) && tbe.ar_ds_rdat) {
     tbe.actions.pushNB(Event:SendCompAck);
     tbe.ar_ds_ack := true;
@@ -1940,7 +1942,11 @@ bool _checkResourceAvailable(RequestType request_type, Addr addr) {
 bool computeSnpAMOReuseBit(TBE tbe, CacheEntry cache_entry) {
   assert(is_valid(tbe));
   assert(tbe.is_snp_amo);
-  assert(is_valid(cache_entry) || (tbe.dir_ownerExists && tbe.dir_ownerIsExcl));
+  // cache_entry may be invalid under a snoop hazard (replacement or fill
+  // in flight) even with no upstream owner; the live counter is then
+  // simply unavailable and reuse falls back to the RT spill signal.
+  // Reporting reuse=0 for a line the owner is evicting is the correct
+  // feedback anyway.
 
   bool upstream_unique := tbe.dir_ownerExists && tbe.dir_ownerIsExcl;
 

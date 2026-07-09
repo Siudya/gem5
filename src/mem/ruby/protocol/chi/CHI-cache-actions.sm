@@ -2917,11 +2917,12 @@ action(Receive_RespSepDataFromCompData, desc="") {
       if (tbe.expected_req_resp.receiveResp(CHIResponseType:RespSepData) == false) {
         error("Received unexpected message");
       }
-      if ((is_HN == false) &&
-          (((tbe.reqType != CHIRequestType:AtomicReturn) &&
-            ((tbe.reqType != CHIRequestType:AtomicLoad) || (tbe.atomic_to_be_done == true))) ||
-           (is_AAN && tbe.aan_fill_read_unique))) {
-        // must now ack the responder
+      if ((is_HN == false) && (is_AAN == false) &&
+          (tbe.reqType != CHIRequestType:AtomicReturn) &&
+          ((tbe.reqType != CHIRequestType:AtomicLoad) || (tbe.atomic_to_be_done == true))) {
+        // must now ack the responder. (AAN fills never reach here anyway:
+        // they set ar_fwd and are excluded by the guard above; their
+        // CompAck is issued from Callback_AAN_AtomicReturn.)
         tbe.actions.pushFrontNB(Event:SendCompAck);
       }
     }
@@ -5193,6 +5194,8 @@ action(Send_SnpAMO, desc="Delegato: Send SnpAMO carrying atomic_op to owner") {
 action(Initiate_SnpAMO, desc="Delegato: Owner executes atomic in place on SnpAMO") {
   assert(tbe.is_snp_amo);
 
+  // Per-path message sequence: obtain the line's current data, ack the
+  // requester, return the old value, then execute the RMW locally.
   if (tbe.dataValid && tbe.dir_sharers.isEmpty()) {
     // Path A: Owner has data locally (UD/UC), no upstream sharers.
     tbe.actions.push(Event:DataArrayRead);
@@ -5200,11 +5203,6 @@ action(Initiate_SnpAMO, desc="Delegato: Owner executes atomic in place on SnpAMO
     tbe.actions.push(Event:SendSnpAMOCompData);
     tbe.actions.push(Event:DelayAtomic);
     tbe.actions.push(Event:DoAtomicLocal);
-    tbe.actions.push(Event:DataArrayWrite);
-    tbe.actions.push(Event:SendSnpAMOResp);
-    if (tbe.is_req_hazard || tbe.is_repl_hazard) {
-      tbe.actions.push(Event:RestoreFromHazard);
-    }
   } else if (tbe.dataValid && !tbe.dir_sharers.isEmpty()) {
     // Path A': Owner has data (UD_RSC/UC_RSC/UD_RSD), upstream has SC/SD.
     // Invalidate upstream first, then execute.
@@ -5214,11 +5212,6 @@ action(Initiate_SnpAMO, desc="Delegato: Owner executes atomic in place on SnpAMO
     tbe.actions.push(Event:SendSnpAMOCompData);
     tbe.actions.push(Event:DelayAtomic);
     tbe.actions.push(Event:DoAtomicLocal);
-    tbe.actions.push(Event:DataArrayWrite);
-    tbe.actions.push(Event:SendSnpAMOResp);
-    if (tbe.is_req_hazard || tbe.is_repl_hazard) {
-      tbe.actions.push(Event:RestoreFromHazard);
-    }
   } else if (!tbe.dataValid && tbe.dir_ownerExists && tbe.dir_ownerIsExcl) {
     // Path B: Owner is RU/UC_RU/UD_RU, data at upstream L1D (exclusive).
     assert(tbe.dir_sharers.count() == 1);
@@ -5227,28 +5220,26 @@ action(Initiate_SnpAMO, desc="Delegato: Owner executes atomic in place on SnpAMO
     tbe.actions.push(Event:SendSnpAMOCompData);
     tbe.actions.push(Event:DelayAtomic);
     tbe.actions.push(Event:DoAtomicLocal);
-    tbe.actions.push(Event:CheckCacheFill);
-    tbe.actions.push(Event:TagArrayWrite);
-    tbe.actions.push(Event:SendSnpAMOResp);
-    if (tbe.is_req_hazard || tbe.is_repl_hazard) {
-      tbe.actions.push(Event:RestoreFromHazard);
-    }
   } else if (!tbe.dataValid && !tbe.dir_sharers.isEmpty()) {
     // Path C: RUSC/RUSD — no local data, upstream has SC/SD (non-exclusive).
-    // Snoop upstream to get data, execute, write to cache.
+    // Snoop upstream to get data, execute locally.
     tbe.actions.pushNB(Event:SendSnpAMODBIDResp);
     tbe.actions.pushNB(Event:SendSnpUniqueRetToSrc);
     tbe.actions.push(Event:SendSnpAMOCompData);
     tbe.actions.push(Event:DelayAtomic);
     tbe.actions.push(Event:DoAtomicLocal);
+  } else {
+    error("Initiate_SnpAMO: unexpected state");
+  }
+
+  // Common tail: install the RMW result and respond to the home.
+  if (tbe.is_req_hazard || tbe.is_repl_hazard) {
+    tbe.actions.push(Event:SendSnpAMOResp);
+    tbe.actions.push(Event:RestoreFromHazard);
+  } else {
     tbe.actions.push(Event:CheckCacheFill);
     tbe.actions.push(Event:TagArrayWrite);
     tbe.actions.push(Event:SendSnpAMOResp);
-    if (tbe.is_req_hazard || tbe.is_repl_hazard) {
-      tbe.actions.push(Event:RestoreFromHazard);
-    }
-  } else {
-    error("Initiate_SnpAMO: unexpected state");
   }
 
   // Owner keeps data — no invalidation
