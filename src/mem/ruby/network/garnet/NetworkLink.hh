@@ -87,6 +87,12 @@ class NetworkLink : public ClockedObject, public Consumer
 
     std::vector<int> mVnets;
     uint32_t bitWidth;
+    // Receiver credit depth override (flits per VC) for this link's
+    // consumer; 0 selects the network default. Long links without a
+    // SerDes bridge need >= 2*latency+2 credits to cover the credit
+    // round trip (a bridge decouples the loop with its unbounded
+    // internal buffer, so bridged links don't need this).
+    uint32_t bufferDepth;
 
   private:
     const int m_id;

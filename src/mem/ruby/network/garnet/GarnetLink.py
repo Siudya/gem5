@@ -55,6 +55,12 @@ class NetworkLink(ClockedObject):
         Parent.supported_vnets, "Vnets supported"
     )
     width = Param.UInt32(Parent.width, "bit-width of the link")
+    buffer_depth = Param.UInt32(
+        0,
+        "receiver credit depth override for this link's consumer "
+        "(flits per VC); 0 = network default. Long links without a "
+        "SerDes bridge need >= 2*latency+2 to cover the credit RTT.",
+    )
 
 
 class CreditLink(NetworkLink):

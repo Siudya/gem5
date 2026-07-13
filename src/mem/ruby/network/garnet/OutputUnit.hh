@@ -57,7 +57,7 @@ class OutputUnit : public Consumer
 {
   public:
     OutputUnit(int id, PortDirection direction, Router *router,
-               uint32_t consumerVcs);
+               uint32_t consumerVcs, uint32_t creditOverride = 0);
     ~OutputUnit() = default;
     void set_out_link(NetworkLink *link);
     void set_credit_link(CreditLink *credit_link);

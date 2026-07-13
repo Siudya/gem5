@@ -47,14 +47,15 @@ namespace garnet
 {
 
 OutputUnit::OutputUnit(int id, PortDirection direction, Router *router,
-  uint32_t consumerVcs)
+  uint32_t consumerVcs, uint32_t creditOverride)
   : Consumer(router), m_router(router), m_id(id), m_direction(direction),
     m_vc_per_vnet(consumerVcs)
 {
     const int m_num_vcs = consumerVcs * m_router->get_num_vnets();
     outVcState.reserve(m_num_vcs);
     for (int i = 0; i < m_num_vcs; i++) {
-        outVcState.emplace_back(i, m_router->get_net_ptr(), consumerVcs);
+        outVcState.emplace_back(i, m_router->get_net_ptr(), consumerVcs,
+                                creditOverride);
     }
 }
 

@@ -129,8 +129,11 @@ Router::addOutPort(PortDirection outport_dirn,
             " Consider inserting SerDes Units");
 
     int port_num = m_output_unit.size();
+    // out_link->bufferDepth > 0 overrides the receiver credit depth for
+    // this port (long non-bridged links need >= 2*latency+2 credits).
     OutputUnit *output_unit = new OutputUnit(port_num, outport_dirn, this,
-                                             consumerVcs);
+                                             consumerVcs,
+                                             out_link->bufferDepth);
 
     output_unit->set_out_link(out_link);
     output_unit->set_credit_link(credit_link);

@@ -65,6 +65,8 @@ class CustomMesh(SimpleTopology):
         num_columns,
         cross_links,
         cross_link_latency,
+        cross_link_width,
+        mesh_link_width,
     ):
         # East->West, West->East, North->South, South->North
         # Weight-based table routing biased to YX:
@@ -75,13 +77,21 @@ class CustomMesh(SimpleTopology):
         def make_link(src, dst, dst_inport, weight):
             is_cross = (src, dst) in cross_links
             if is_cross:
-                # Cross-chiplet (D2D) link: 64B flits, reached through
-                # SerDes bridges at both ends that convert from the 32B
-                # intra-chiplet flit width (die-boundary PHY). Bridges are
-                # auto-created in Network.py when the serdes flags are set;
-                # router-side width stays at ni_flit_size. NOTE: despite
-                # the Param docstring, link width units are bytes
-                # (ni_flit_size is in bytes).
+                # Cross-chiplet (D2D) link, cross_link_width bytes per flit
+                # (default 64), reached through SerDes bridges at both ends
+                # that convert from the 32B intra-chiplet flit width
+                # (die-boundary PHY). Bridges are auto-created in Network.py
+                # when the serdes flags are set; router-side width stays at
+                # ni_flit_size. NOTE: despite the Param docstring, link
+                # width units are bytes (ni_flit_size is in bytes).
+                # When the D2D width equals the mesh width (32B ablation
+                # point) the SerDes would assert on equal widths, so the
+                # link is created plain. A bridged link needs no credit
+                # override (the bridge's unbounded internal buffer decouples
+                # the credit loop); a plain long link does, or the
+                # 2*latency-cycle credit round trip throttles it to
+                # buffer_depth/RTT of line rate.
+                serdes = cross_link_width != mesh_link_width
                 link = IntLink(
                     link_id=self._link_count,
                     src_node=self._routers[src],
@@ -89,10 +99,14 @@ class CustomMesh(SimpleTopology):
                     dst_inport=dst_inport,
                     latency=cross_link_latency,
                     weight=weight,
-                    width=64,
-                    src_serdes=True,
-                    dst_serdes=True,
+                    width=cross_link_width,
+                    src_serdes=serdes,
+                    dst_serdes=serdes,
                 )
+                if not serdes:
+                    link.network_link.buffer_depth = (
+                        2 * cross_link_latency + 2
+                    )
             else:
                 link = IntLink(
                     link_id=self._link_count,
@@ -327,6 +341,8 @@ class CustomMesh(SimpleTopology):
             num_cols,
             options.cross_links,
             options.cross_link_latency,
+            getattr(options, "d2d_link_width", None) or 64,
+            options.link_width_bits // 8,
         )
 
         # Place CHI_RNF on the mesh
