@@ -72,6 +72,7 @@ from common.cores.arm import (
 from ruby import Ruby
 from amo_policy import (
     add_amo_policy_args,
+    apply_ablation_overrides,
     resolve_amo_policy,
 )
 from delegato_routing_helper import (
@@ -417,7 +418,10 @@ def create(args):
             cntrl.aan_amo_policy = policy.aan_policy_code
             cntrl.hnf_amo_policy = policy.hnf_policy_code
             cntrl.cache_block_size_bits = block_size_bits
-            cntrl.aan_bat_entries = 128
+            cntrl.aan_bat_entries = (
+                args.aan_bat_entries
+                if args.aan_bat_entries is not None else 128
+            )
             cntrl.aan_bat_assoc = 2
 
     for hnf in system.ruby.hnf:
@@ -611,6 +615,7 @@ def main():
     if args.skip_ruby_cache_checkpoint_flush and not args.checkpoint_at_switch:
         parser.error("--skip-ruby-cache-checkpoint-flush requires "
                      "--checkpoint-at-switch")
+    apply_ablation_overrides(args)
     policy = resolve_amo_policy(
         args.amo_policy,
         args.l1d_amo_policy,
@@ -648,9 +653,11 @@ def main():
     args.chi_config = noc_config
     args.network = "garnet"
     args.ruby_clock = "2GHz"
-    # Keep in sync with delegato_se.py: 32B intra-chiplet flits, 64B D2D
-    # links via SerDes bridges (see CustomMesh).
+    # Keep in sync with delegato_se.py: 32B intra-chiplet flits, D2D links
+    # widened via SerDes bridges (default 64B; --d2d-link-width overrides).
     args.link_width_bits = 256
+    if args.d2d_link_width is None:
+        args.d2d_link_width = 64
     args.enable_custom_route_table = True
     configure_system_route_helpers(
         args, args.chi_config, single_die=(args.num_cpus == 4)

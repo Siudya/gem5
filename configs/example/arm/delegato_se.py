@@ -18,6 +18,7 @@ from common.cores.arm import HPI, O3_ARM_v7a
 from ruby import Ruby
 from amo_policy import (
     add_amo_policy_args,
+    apply_ablation_overrides,
     resolve_amo_policy,
 )
 from delegato_routing_helper import (
@@ -86,6 +87,7 @@ def _configure_topology(args, parser):
         parser.error("--num-cpus only supports 4, 16, or 32")
     if args.heartbeat_insts < 0:
         parser.error("--heartbeat-insts must be a non-negative integer")
+    apply_ablation_overrides(args)
     policy = resolve_amo_policy(
         args.amo_policy,
         args.l1d_amo_policy,
@@ -121,10 +123,12 @@ def _configure_topology(args, parser):
     args.network = "garnet"
     args.ruby_clock = "2GHz"
     # 256-bit (32B) links inside each chiplet; the D2D links are widened
-    # to 64B via SerDes bridges in CustomMesh. Per-direction D2D
-    # bandwidth: 4 links x 64B x 2GHz = 512 GB/s (Grace NVLink-C2C
-    # class, cf. Delegato's 450 GB/s).
+    # via SerDes bridges in CustomMesh (default 64B/flit -> 4 links x 64B
+    # x 2GHz = 512 GB/s per direction, Grace NVLink-C2C class, cf.
+    # Delegato's 450 GB/s). --d2d-link-width overrides for ablations.
     args.link_width_bits = 256
+    if args.d2d_link_width is None:
+        args.d2d_link_width = 64
     args.enable_custom_route_table = True
     configure_system_route_helpers(
         args, args.chi_config, single_die=(args.num_cpus == 4)
@@ -190,7 +194,10 @@ def _apply_amo_policy(system, args):
             cntrl.aan_amo_policy = policy.aan_policy_code
             cntrl.hnf_amo_policy = policy.hnf_policy_code
             cntrl.cache_block_size_bits = block_size_bits
-            cntrl.aan_bat_entries = 128
+            cntrl.aan_bat_entries = (
+                args.aan_bat_entries
+                if args.aan_bat_entries is not None else 128
+            )
             cntrl.aan_bat_assoc = 2
 
     for hnf in system.ruby.hnf:

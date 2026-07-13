@@ -777,8 +777,22 @@ class CHI_AAN(CHI_Node):
         num_nodes = getattr(cls.NoC_Params, "num_nodes", None)
         if num_nodes is None:
             num_nodes = len(router_list)
+        # --aan-cache-kib ablation override (default: AANCache class value)
+        cache_kib = getattr(options, "aan_cache_kib", None)
+        if cache_kib:
+            cache_type = type(
+                f"AANCache{cache_kib}K",
+                (AANCache,),
+                {
+                    "size": f"{cache_kib}KiB",
+                    # Keep 64 sets max: grow associativity past 16KiB.
+                    "assoc": 4 if cache_kib <= 16 else 4 * cache_kib // 16,
+                },
+            )
+        else:
+            cache_type = AANCache
         return [
-            cls(i, ruby_system, AANCache, options.cacheline_size)
+            cls(i, ruby_system, cache_type, options.cacheline_size)
             for i in range(num_nodes)
         ]
 
