@@ -36,7 +36,7 @@ TOP_POLICY_MAP = {
     "all-central": ("unique-near", "bypass", "central"),
     "dynamo": ("dynamo", "bypass", "central"),
     "delegato": ("unique-near", "bypass", "delegato"),
-    "dynaan": ("dynamo", "near", "central"),
+    "dynaan-nofilter": ("dynamo", "near", "central"),
     "dynaan-filter": ("dynamo", "filter", "central"),
 }
 
@@ -45,13 +45,15 @@ TOP_POLICY_MAP = {
 # maps to aan_policy=near (bypass filter, admit all) instead of filter.
 # Examples:
 #   dynaan-bat32-c16k-d2d64  -> filter, bat=32, cache=16k, d2d=64
-#   dynaan-bat0-c4k          -> near (no filter), bat unused, cache=4k, d2d=64
+#   dynaan-bat0-c4k          -> dynaan-nofilter (admit all), cache=4k, d2d=64
 #   dynamo-d2d16             -> dynamo baseline, d2d=16
 # Regex: (dynaan|dynamo)(-bat(\d+))?(-c(\d+)k)?(-d2d(\d+))?
-# Kept for backward compat; new sims should use the parameterized form.
 ABLATION_POLICY_MAP = {
+    # Headline perf configuration: "dynaan" is the paper's DynAAN design
+    # point = filter + BAT 512 entries + 4KiB AAN cache (d2d64 default).
+    "dynaan":               ("dynaan-filter", {"aan_bat_entries": 512, "aan_cache_kib": 4}),
     # A. BAT capacity sweep (bat0 = no filter; c16k/d2d64 isolate other dims)
-    "dynaan-bat0-c16k":     ("dynaan",        {"aan_cache_kib": 16}),
+    "dynaan-bat0-c16k":     ("dynaan-nofilter", {"aan_cache_kib": 16}),
     "dynaan-bat32-c16k":    ("dynaan-filter", {"aan_bat_entries": 32, "aan_cache_kib": 16}),
     "dynaan-bat64-c16k":    ("dynaan-filter", {"aan_bat_entries": 64, "aan_cache_kib": 16}),
     "dynaan-bat128-c16k":   ("dynaan-filter", {"aan_bat_entries": 128, "aan_cache_kib": 16}),
