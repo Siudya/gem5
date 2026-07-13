@@ -40,33 +40,40 @@ TOP_POLICY_MAP = {
     "dynaan-filter": ("dynamo", "filter", "central"),
 }
 
-# Ablation policies: same protocol axes as their base policy, plus knob
-# overrides applied through gem5 command-line arguments. Keys of the
-# override dict are argparse dest names (see add_amo_policy_args).
-#   aan_bat_entries : BAT capacity (entries; assoc fixed at 2)
-#   aan_cache_kib   : AAN data array capacity (KiB)
-#   d2d_link_width  : cross-die link width (bytes/flit; SerDes converts
-#                     from the 32B mesh width)
+# Ablation policies: parameterized name parsed as dynaan-bat<N>-c<M>k-d2d<W>
+# with missing segments defaulting to (bat128, c4k, d2d64). bat0 is special:
+# maps to aan_policy=near (bypass filter, admit all) instead of filter.
+# Examples:
+#   dynaan-bat32-c16k-d2d64  -> filter, bat=32, cache=16k, d2d=64
+#   dynaan-bat0-c4k          -> near (no filter), bat unused, cache=4k, d2d=64
+#   dynamo-d2d16             -> dynamo baseline, d2d=16
+# Regex: (dynaan|dynamo)(-bat(\d+))?(-c(\d+)k)?(-d2d(\d+))?
+# Kept for backward compat; new sims should use the parameterized form.
 ABLATION_POLICY_MAP = {
-    # B. BAT capacity sweep (dynaan == no-filter zero point)
-    "dynaan-filter-bat32":  ("dynaan-filter", {"aan_bat_entries": 32}),
-    "dynaan-filter-bat64":  ("dynaan-filter", {"aan_bat_entries": 64}),
-    "dynaan-filter-bat256": ("dynaan-filter", {"aan_bat_entries": 256}),
-    "dynaan-filter-bat512": ("dynaan-filter", {"aan_bat_entries": 512}),
-    # C. AAN cache capacity sweep (default 4KiB)
-    "dynaan-filter-c1k":  ("dynaan-filter", {"aan_cache_kib": 1}),
-    "dynaan-filter-c2k":  ("dynaan-filter", {"aan_cache_kib": 2}),
-    "dynaan-filter-c16k": ("dynaan-filter", {"aan_cache_kib": 16}),
-    "dynaan-filter-c64k": ("dynaan-filter", {"aan_cache_kib": 64}),
-    # A. D2D bandwidth sweep (default 64B/flit); the dynamo-d2d* points
-    # keep a DynAMO reference at the same width so the AAN margin is
-    # isolated from the raw bandwidth effect.
-    "dynaan-filter-d2d16":  ("dynaan-filter", {"d2d_link_width": 16}),
-    "dynaan-filter-d2d32":  ("dynaan-filter", {"d2d_link_width": 32}),
-    "dynaan-filter-d2d128": ("dynaan-filter", {"d2d_link_width": 128}),
-    "dynamo-d2d16":  ("dynamo", {"d2d_link_width": 16}),
-    "dynamo-d2d32":  ("dynamo", {"d2d_link_width": 32}),
-    "dynamo-d2d128": ("dynamo", {"d2d_link_width": 128}),
+    # A. BAT capacity sweep (bat0 = no filter; c16k/d2d64 isolate other dims)
+    "dynaan-bat0-c16k":     ("dynaan",        {"aan_cache_kib": 16}),
+    "dynaan-bat32-c16k":    ("dynaan-filter", {"aan_bat_entries": 32, "aan_cache_kib": 16}),
+    "dynaan-bat64-c16k":    ("dynaan-filter", {"aan_bat_entries": 64, "aan_cache_kib": 16}),
+    "dynaan-bat128-c16k":   ("dynaan-filter", {"aan_bat_entries": 128, "aan_cache_kib": 16}),
+    "dynaan-bat256-c16k":   ("dynaan-filter", {"aan_bat_entries": 256, "aan_cache_kib": 16}),
+    "dynaan-bat512-c16k":   ("dynaan-filter", {"aan_bat_entries": 512, "aan_cache_kib": 16}),
+    "dynaan-bat2048-c16k":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16}),
+    # B. AAN cache capacity sweep (bat2048/d2d64 = over-provisioned baseline)
+    "dynaan-bat2048-c1k":   ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 1}),
+    "dynaan-bat2048-c2k":   ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 2}),
+    "dynaan-bat2048-c4k":   ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 4}),
+    "dynaan-bat2048-c8k":   ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 8}),
+    "dynaan-bat2048-c16k":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16}),
+    # C. D2D bandwidth sweep (bat2048-c16k = over-provisioned AAN)
+    "dynaan-bat2048-c16k-d2d16":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "d2d_link_width": 16}),
+    "dynaan-bat2048-c16k-d2d32":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "d2d_link_width": 32}),
+    "dynaan-bat2048-c16k-d2d64":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "d2d_link_width": 64}),
+    "dynaan-bat2048-c16k-d2d128": ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "d2d_link_width": 128}),
+    # C. DynAMO baseline at same bandwidths (isolate AAN margin from raw BW)
+    "dynamo-d2d16":   ("dynamo", {"d2d_link_width": 16}),
+    "dynamo-d2d32":   ("dynamo", {"d2d_link_width": 32}),
+    "dynamo-d2d64":   ("dynamo", {"d2d_link_width": 64}),
+    "dynamo-d2d128":  ("dynamo", {"d2d_link_width": 128}),
 }
 
 
