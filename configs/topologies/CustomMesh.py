@@ -333,14 +333,19 @@ class CustomMesh(SimpleTopology):
         self._int_links = []
         self._ext_links = []
 
-        # Create all the mesh internal links.
+        # Create all the mesh internal links.  --d2d-link-latency (set by
+        # the -lat<N> policy suffix) overrides the noc_config default for
+        # the cross-chiplet (D2D) links; intra-chiplet links are unaffected.
+        d2d_latency = getattr(options, "d2d_link_latency", None)
+        if d2d_latency is None:
+            d2d_latency = options.cross_link_latency
         self._makeMesh(
             IntLink,
             self._router_link_latency,
             num_rows,
             num_cols,
             options.cross_links,
-            options.cross_link_latency,
+            d2d_latency,
             getattr(options, "d2d_link_width", None) or 64,
             options.link_width_bits // 8,
         )

@@ -336,9 +336,10 @@ structure(AMOStats, external = "yes") {
 }
 
 // AAN bypass/admission table (BAT): filtered AAN rejects the first lookup of a
-// line and admits later lookups; no-filter AAN admits every lookup.
+// line and admits later lookups; no-filter AAN admits every lookup. The two
+// Tick args are (now, lifetime window in ticks; 0 disables entry lifetimes).
 structure(AANAdmissionTable, external = "yes") {
-    bool shouldAdmit(Addr, bool);
+    bool shouldAdmit(Addr, bool, Tick, Tick);
     void incDispatch();
     void incReceived();
     void incLocalHit();

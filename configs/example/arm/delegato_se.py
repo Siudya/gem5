@@ -196,9 +196,13 @@ def _apply_amo_policy(system, args):
             cntrl.cache_block_size_bits = block_size_bits
             cntrl.aan_bat_entries = (
                 args.aan_bat_entries
-                if args.aan_bat_entries is not None else 128
+                if args.aan_bat_entries is not None else 256
             )
             cntrl.aan_bat_assoc = 2
+            cntrl.aan_bat_lifetime_cycles = (
+                args.aan_bat_lifetime_cycles
+                if args.aan_bat_lifetime_cycles is not None else 5000
+            )
 
     for hnf in system.ruby.hnf:
         for cntrl in hnf.getAllControllers():

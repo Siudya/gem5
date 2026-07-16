@@ -1,9 +1,35 @@
 # Copyright (c) 2026
 # All rights reserved.
 
-"""AMO policy resolver for Delegato experiments."""
+"""AMO policy resolver for Delegato / DynAAN experiments.
+
+Unified policy naming.  Every runnable policy name carries an explicit
+D2D cross-die link-latency suffix ``-lat<N>`` (cycles); there are no bare
+aliases.  The latency axis is orthogonal to every other knob, so it is
+always appended last:
+
+    <stem>-lat<N>
+
+Static baselines (no AAN knobs):
+    all-near-lat<N>   all-central-lat<N>   dynamo-lat<N>   delegato-lat<N>
+
+DynAAN design point (BAT 256 entries, AAN cache 4KiB, BAT lifetime 5000):
+    dynaan-lat<N>
+
+DynAAN ablation stems (hold two knobs over-provisioned, sweep the third,
+all at c16k/bat2048 unless swept):
+    BAT sweep       dynaan-bat{0,32,128,256,512,2048}-c16k-lat<N>
+    cache sweep     dynaan-bat2048-c{1,2,4,8,16}k-lat<N>
+    lifetime sweep  dynaan-bat2048-c16k[-lt{0,1k,10k,50k,1m}]-lat<N>
+                    (the lt5000 midpoint is dynaan-bat2048-c16k itself)
+
+``bat0`` is special: it maps to aan_policy=near (admit-all, the BAT filter
+is bypassed) rather than filter -- the "No Filter" end of the BAT sweep.
+D2D link *width* is fixed at 64B/flit and is no longer an ablation axis.
+"""
 
 from dataclasses import dataclass
+import re
 
 
 L1D_POLICY_CODES = {
@@ -28,10 +54,12 @@ HNF_POLICY_CODES = {
     "pa": 6,
 }
 
-# Main policies. The static directory sub-policies (pc/po/ca/all-migrate)
-# and the pinned-AAN variants remain reachable through the axis overrides
-# (--l1d/--aan/--hnf-amo-policy) but are no longer top-level names.
-TOP_POLICY_MAP = {
+# Internal protocol axis definitions (l1d, aan, hnf).  These are the
+# building blocks every user-facing policy resolves to; they are not
+# selectable on their own (they carry no D2D-latency suffix).  The static
+# directory sub-policies (pc/po/ca/all-migrate) and pinned-AAN variants
+# remain reachable through the axis overrides (--l1d/--aan/--hnf-amo-policy).
+PROTOCOL_AXES = {
     "all-near": ("near", "bypass", "central"),
     "all-central": ("unique-near", "bypass", "central"),
     "dynamo": ("dynamo", "bypass", "central"),
@@ -40,43 +68,58 @@ TOP_POLICY_MAP = {
     "dynaan-filter": ("dynamo", "filter", "central"),
 }
 
-# Ablation policies: parameterized name parsed as dynaan-bat<N>-c<M>k-d2d<W>
-# with missing segments defaulting to (bat128, c4k, d2d64). bat0 is special:
-# maps to aan_policy=near (bypass filter, admit all) instead of filter.
-# Examples:
-#   dynaan-bat32-c16k-d2d64  -> filter, bat=32, cache=16k, d2d=64
-#   dynaan-bat0-c4k          -> dynaan-nofilter (admit all), cache=4k, d2d=64
-#   dynamo-d2d16             -> dynamo baseline, d2d=16
-# Regex: (dynaan|dynamo)(-bat(\d+))?(-c(\d+)k)?(-d2d(\d+))?
-ABLATION_POLICY_MAP = {
-    # Headline perf configuration: "dynaan" is the paper's DynAAN design
-    # point = filter + BAT 512 entries + 4KiB AAN cache (d2d64 default).
-    "dynaan":               ("dynaan-filter", {"aan_bat_entries": 512, "aan_cache_kib": 4}),
-    # A. BAT capacity sweep (bat0 = no filter; c16k/d2d64 isolate other dims)
-    "dynaan-bat0-c16k":     ("dynaan-nofilter", {"aan_cache_kib": 16}),
-    "dynaan-bat32-c16k":    ("dynaan-filter", {"aan_bat_entries": 32, "aan_cache_kib": 16}),
-    "dynaan-bat64-c16k":    ("dynaan-filter", {"aan_bat_entries": 64, "aan_cache_kib": 16}),
-    "dynaan-bat128-c16k":   ("dynaan-filter", {"aan_bat_entries": 128, "aan_cache_kib": 16}),
-    "dynaan-bat256-c16k":   ("dynaan-filter", {"aan_bat_entries": 256, "aan_cache_kib": 16}),
-    "dynaan-bat512-c16k":   ("dynaan-filter", {"aan_bat_entries": 512, "aan_cache_kib": 16}),
-    "dynaan-bat2048-c16k":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16}),
-    # B. AAN cache capacity sweep (bat2048/d2d64 = over-provisioned baseline)
-    "dynaan-bat2048-c1k":   ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 1}),
-    "dynaan-bat2048-c2k":   ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 2}),
-    "dynaan-bat2048-c4k":   ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 4}),
-    "dynaan-bat2048-c8k":   ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 8}),
-    "dynaan-bat2048-c16k":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16}),
-    # C. D2D bandwidth sweep (bat2048-c16k = over-provisioned AAN)
-    "dynaan-bat2048-c16k-d2d16":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "d2d_link_width": 16}),
-    "dynaan-bat2048-c16k-d2d32":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "d2d_link_width": 32}),
-    "dynaan-bat2048-c16k-d2d64":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "d2d_link_width": 64}),
-    "dynaan-bat2048-c16k-d2d128": ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "d2d_link_width": 128}),
-    # C. DynAMO baseline at same bandwidths (isolate AAN margin from raw BW)
-    "dynamo-d2d16":   ("dynamo", {"d2d_link_width": 16}),
-    "dynamo-d2d32":   ("dynamo", {"d2d_link_width": 32}),
-    "dynamo-d2d64":   ("dynamo", {"d2d_link_width": 64}),
-    "dynamo-d2d128":  ("dynamo", {"d2d_link_width": 128}),
+# Canonical D2D link latencies (cycles) used to enumerate valid policy
+# names.  The performance/ablation experiments pin latency at 100; the
+# D2D-latency sweep uses the full set.
+LATENCIES = (1, 50, 100, 150, 200)
+
+# DynAAN design-point AAN knobs.
+_DYNAAN_DP = {
+    "aan_bat_entries": 256,
+    "aan_cache_kib": 4,
+    "aan_bat_lifetime_cycles": 5000,
 }
+
+# Policy "shapes": stem -> (protocol-axis key, AAN knob overrides).  The
+# D2D link latency is supplied separately via the mandatory -lat<N> suffix.
+SHAPE_MAP = {
+    # Static baselines (no AAN knobs).
+    "all-near": ("all-near", {}),
+    "all-central": ("all-central", {}),
+    "dynamo": ("dynamo", {}),
+    "delegato": ("delegato", {}),
+    # DynAAN design point: filter + BAT 256 + AAN cache 4KiB + lifetime 5000.
+    "dynaan": ("dynaan-filter", dict(_DYNAAN_DP)),
+    # A. BAT capacity sweep (c16k / lt5000 fixed so only the table moves).
+    # bat0 = No Filter (admit-all) end.
+    "dynaan-bat0-c16k":    ("dynaan-nofilter", {"aan_cache_kib": 16}),
+    "dynaan-bat32-c16k":   ("dynaan-filter", {"aan_bat_entries": 32, "aan_cache_kib": 16, "aan_bat_lifetime_cycles": 5000}),
+    "dynaan-bat128-c16k":  ("dynaan-filter", {"aan_bat_entries": 128, "aan_cache_kib": 16, "aan_bat_lifetime_cycles": 5000}),
+    "dynaan-bat256-c16k":  ("dynaan-filter", {"aan_bat_entries": 256, "aan_cache_kib": 16, "aan_bat_lifetime_cycles": 5000}),
+    "dynaan-bat512-c16k":  ("dynaan-filter", {"aan_bat_entries": 512, "aan_cache_kib": 16, "aan_bat_lifetime_cycles": 5000}),
+    # Over-provisioned max, shared by the BAT / cache / lifetime sweeps
+    # (== bat2048, c16k, lt5000).
+    "dynaan-bat2048-c16k": ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "aan_bat_lifetime_cycles": 5000}),
+    # B. AAN cache capacity sweep (bat2048 / lt5000 fixed).
+    "dynaan-bat2048-c1k":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 1, "aan_bat_lifetime_cycles": 5000}),
+    "dynaan-bat2048-c2k":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 2, "aan_bat_lifetime_cycles": 5000}),
+    "dynaan-bat2048-c4k":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 4, "aan_bat_lifetime_cycles": 5000}),
+    "dynaan-bat2048-c8k":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 8, "aan_bat_lifetime_cycles": 5000}),
+    # C. BAT entry-lifetime sweep (leaky-bucket window, cycles) on the
+    # oversized bat2048/c16k table so capacity eviction cannot mask the
+    # lifetime effect.  lt0 = capacity-only end (lifetimes disabled); the
+    # lt5000 midpoint is dynaan-bat2048-c16k above.  Expect both extremes
+    # to hurt: ultra-short kills SCQ re-admission after recalls, ultra-long
+    # reverts to capacity-only and readmits KME churn.
+    "dynaan-bat2048-c16k-lt0":   ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "aan_bat_lifetime_cycles": 0}),
+    "dynaan-bat2048-c16k-lt1k":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "aan_bat_lifetime_cycles": 1000}),
+    "dynaan-bat2048-c16k-lt10k": ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "aan_bat_lifetime_cycles": 10000}),
+    "dynaan-bat2048-c16k-lt50k": ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "aan_bat_lifetime_cycles": 50000}),
+    "dynaan-bat2048-c16k-lt1m":  ("dynaan-filter", {"aan_bat_entries": 2048, "aan_cache_kib": 16, "aan_bat_lifetime_cycles": 1000000}),
+}
+
+
+_LAT_RE = re.compile(r"^(?P<stem>.+)-lat(?P<lat>\d+)$")
 
 
 @dataclass(frozen=True)
@@ -109,22 +152,48 @@ def _validate(name, value, valid):
         raise ValueError(f"unknown {name} '{value}'. Choose: {choices}")
 
 
+def _split_latency(name):
+    """Split a policy name into (stem, d2d_latency_cycles)."""
+    match = _LAT_RE.match(name or "")
+    if not match:
+        raise ValueError(
+            f"policy '{name}' has no -lat<N> suffix; every policy name must "
+            f"end in -lat<cycles>, e.g. dynaan-lat100 or all-near-lat50"
+        )
+    return match.group("stem"), int(match.group("lat"))
+
+
+def _resolve_shape(name):
+    """Resolve a full policy name to (protocol-axis key, knob overrides)."""
+    stem, latency = _split_latency(name)
+    if stem not in SHAPE_MAP:
+        raise ValueError(
+            f"unknown policy stem '{stem}' in '{name}'. Known stems: "
+            + ", ".join(SHAPE_MAP)
+        )
+    base, knobs = SHAPE_MAP[stem]
+    overrides = dict(knobs)
+    overrides["d2d_link_latency"] = latency
+    return base, overrides
+
+
 def base_policy_name(top_policy):
-    """Map an ablation policy name to its base protocol policy."""
-    if top_policy in ABLATION_POLICY_MAP:
-        return ABLATION_POLICY_MAP[top_policy][0]
-    return top_policy
+    """Map a user-facing policy name to its protocol-axis key."""
+    return _resolve_shape(top_policy)[0]
 
 
 def ablation_overrides(top_policy):
-    """Knob overrides for an ablation policy name ({} for main policies)."""
-    if top_policy in ABLATION_POLICY_MAP:
-        return dict(ABLATION_POLICY_MAP[top_policy][1])
-    return {}
+    """Knob overrides (AAN sizing + D2D latency) for a policy name."""
+    return _resolve_shape(top_policy)[1]
 
 
 def all_policy_names():
-    return list(TOP_POLICY_MAP) + list(ABLATION_POLICY_MAP)
+    """Every runnable policy name: {stem}-lat{N} over the canonical grid."""
+    return [
+        f"{stem}-lat{latency}"
+        for stem in SHAPE_MAP
+        for latency in LATENCIES
+    ]
 
 
 def resolve_amo_policy(
@@ -134,8 +203,8 @@ def resolve_amo_policy(
     hnf_policy=None,
 ):
     base = base_policy_name(top_policy)
-    _validate("top AMO policy", base, TOP_POLICY_MAP)
-    resolved_l1d, resolved_aan, resolved_hnf = TOP_POLICY_MAP[base]
+    _validate("top AMO policy", base, PROTOCOL_AXES)
+    resolved_l1d, resolved_aan, resolved_hnf = PROTOCOL_AXES[base]
 
     if l1d_policy is not None:
         _validate("L1D AMO policy", l1d_policy, L1D_POLICY_CODES)
@@ -161,9 +230,9 @@ def add_amo_policy_args(parser):
     parser.add_argument(
         "--amo-policy",
         type=str,
-        default="delegato",
+        default="dynaan-lat100",
         choices=all_policy_names(),
-        help="Top-level AMO policy (main or ablation variant)",
+        help="Top-level AMO policy (<stem>-lat<cycles>; see amo_policy.py)",
     )
     parser.add_argument(
         "--l1d-amo-policy",
@@ -186,14 +255,23 @@ def add_amo_policy_args(parser):
         choices=list(HNF_POLICY_CODES),
         help="Override HNF AMO policy",
     )
-    # Ablation knobs. None = platform default (BAT 128 entries, AAN cache
-    # 4KiB, D2D 64B/flit). Ablation policy names pre-fill these through
+    # Ablation knobs.  None = platform default (BAT 256 entries, AAN cache
+    # 4KiB, BAT lifetime 5000 cycles, D2D 64B/flit, D2D latency from the
+    # noc_config).  Policy names pre-fill these through
     # apply_ablation_overrides; explicit CLI values take precedence.
     parser.add_argument(
         "--aan-bat-entries",
         type=int,
         default=None,
-        help="AAN boundary admission table entries (default 128)",
+        help="AAN boundary admission table entries (default 256)",
+    )
+    parser.add_argument(
+        "--aan-bat-lifetime-cycles",
+        type=int,
+        default=None,
+        help="BAT entry lifetime window in cycles (leaky bucket: expired "
+        "window costs one 5-bit reuse credit, spent entry dies; admits "
+        "recharge). Default 5000; 0 = capacity-only eviction",
     )
     parser.add_argument(
         "--aan-cache-kib",
@@ -205,5 +283,12 @@ def add_amo_policy_args(parser):
         "--d2d-link-width",
         type=int,
         default=None,
-        help="Cross-die link width in bytes/flit (default 64)",
+        help="Cross-die link width in bytes/flit (fixed 64)",
+    )
+    parser.add_argument(
+        "--d2d-link-latency",
+        type=int,
+        default=None,
+        help="Cross-die link latency in cycles (set by the -lat<N> policy "
+        "suffix; falls back to the noc_config default when unset)",
     )

@@ -164,6 +164,10 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   // AAN admission table parameters (BAT)
   int aan_bat_entries := 128;
   int aan_bat_assoc := 2;
+  // BAT entry lifetime window in cycles (leaky bucket: each entry holds a
+  // 5-bit reuse counter; an expired window costs one credit, a spent entry
+  // dies; admits recharge). 0 disables lifetimes (capacity-only eviction).
+  Cycles aan_bat_lifetime_cycles := 0;
   bool is_AAN := "False";
 
   // Set for the private L2 (the interconnect-facing RN-F). L2 uses ar_fwd for

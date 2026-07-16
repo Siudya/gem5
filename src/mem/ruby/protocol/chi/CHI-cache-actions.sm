@@ -1560,7 +1560,7 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       tbe.ar_ds_rdat := true;
       tbe.ar_ds_ack  := true;
       Callback_AAN_AtomicReturn(tbe);
-    } else if (aanBAT.shouldAdmit(tbe.addr, aan_amo_policy == 1)) {
+    } else if (aanBAT.shouldAdmit(tbe.addr, aan_amo_policy == 1, curTick(), cyclesToTicks(aan_bat_lifetime_cycles))) {
       // AAN Fill (BAT admits): fetch ownership via ReadUnique, overlap waits.
       aanBAT.incFill();
       amoStats.incAANMiss();

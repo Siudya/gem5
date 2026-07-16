@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "base/statistics.hh"
+#include "base/types.hh"
 #include "mem/ruby/common/Address.hh"
 
 namespace gem5
@@ -49,6 +50,18 @@ namespace ruby
  * admission; later lookups of the same resident BAT tag admit.  For no-filter
  * AAN, every lookup admits without allocating a BAT entry.
  *
+ * Entry lifetime (leaky bucket, optional): each entry carries a 5-bit reuse
+ * saturating counter and a lifetime window of `lifetimeTicks`.  Conceptually
+ * the lifetime counts down every cycle; when it expires, an entry with
+ * reuse > 0 pays one reuse credit and restarts its window, while an entry
+ * with reuse == 0 dies.  A new entry starts with reuse = 0 (one window to
+ * prove itself); every admit recharges reuse by one.  Long-idle candidates
+ * therefore expire in one window, while repeatedly readmitted hot lines
+ * accumulate credits and survive proportionally longer.  The implementation
+ * settles lazily in O(1) at lookup/allocate time: k = elapsed/W full windows
+ * are charged against the reuse counter, and the entry dies if k exceeds it.
+ * lifetimeTicks == 0 disables lifetimes (capacity-only eviction).
+ *
  * Stats registered here appear under the owning cache controller's stats
  * namespace (same pattern as TBEStorage).
  */
@@ -58,9 +71,9 @@ class AANAdmissionTable
     // parent is the owning cache controller (statistics::Group).
     AANAdmissionTable(statistics::Group *parent,
                       int entries, int assoc, int blockSizeBits)
-        : m_assoc(assoc),
-          m_blockSizeBits(blockSizeBits),
-          aanStats(parent)
+        : aanStats(parent),
+          m_assoc(assoc),
+          m_blockSizeBits(blockSizeBits)
     {
         assert(entries > 0 && assoc > 0);
         assert(blockSizeBits > 0);
@@ -69,8 +82,12 @@ class AANAdmissionTable
         m_table.resize(m_sets, std::vector<Entry>(m_assoc));
     }
 
+    // now/lifetimeTicks drive the lazy lifetime settlement; the caller
+    // supplies both each call (lifetime from a Cycles parameter via
+    // cyclesToTicks) so the table needs no clock of its own.
+    // lifetimeTicks == 0 disables lifetimes.
     bool
-    shouldAdmit(Addr addr, bool noFilter)
+    shouldAdmit(Addr addr, bool noFilter, Tick now = 0, Tick lifetimeTicks = 0)
     {
         ++aanStats.batLookups;
 
@@ -80,13 +97,24 @@ class AANAdmissionTable
         }
 
         Entry* entry = lookup(addr);
+        if (entry != nullptr && !settle(*entry, now, lifetimeTicks)) {
+            // Lifetime expired with no reuse credit left: the candidate
+            // record is gone; this touch restarts it as a first touch.
+            ++aanStats.batExpires;
+            entry = nullptr;
+        }
         if (entry != nullptr) {
+            if (entry->reuse < REUSE_MAX) {
+                ++entry->reuse;
+            }
             touchLRU(*entry);
             ++aanStats.batAdmits;
             return true;
         }
 
-        allocate(addr);
+        Entry* allocated = allocate(addr, now, lifetimeTicks);
+        allocated->reuse = 0;
+        allocated->base = now;
         ++aanStats.batRejects;
         return false;
     }
@@ -111,7 +139,8 @@ class AANAdmissionTable
               ADD_STAT(amoExec,    "AAN: local AMO executions after NCBWrData"),
               ADD_STAT(batLookups, "AAN BAT: total shouldAdmit calls"),
               ADD_STAT(batAdmits,  "AAN BAT: admissions (nofilter + seen-again)"),
-              ADD_STAT(batRejects, "AAN BAT: first-touch rejections")
+              ADD_STAT(batRejects, "AAN BAT: first-touch rejections"),
+              ADD_STAT(batExpires, "AAN BAT: entries found dead at lookup (lifetime spent)")
         {}
 
         statistics::Scalar dispatch;
@@ -123,13 +152,18 @@ class AANAdmissionTable
         statistics::Scalar batLookups;
         statistics::Scalar batAdmits;
         statistics::Scalar batRejects;
+        statistics::Scalar batExpires;
     } aanStats;
+
+    static constexpr uint8_t REUSE_MAX = 31;  // 5-bit saturating
 
     struct Entry
     {
         bool valid = false;
         Addr tag = 0;
         uint64_t lruStamp = 0;
+        uint8_t reuse = 0;   // lifetime credits (5-bit saturating)
+        Tick base = 0;       // start of the current lifetime window
     };
 
     int m_sets = 0;
@@ -151,6 +185,30 @@ class AANAdmissionTable
         return addr >> m_blockSizeBits;
     }
 
+    // Lazily apply lifetime windows elapsed since entry.base. Returns false
+    // (and invalidates the entry) if the lifetime is spent; true if the
+    // entry is still alive (reuse charged, base advanced). No-op when
+    // lifetimes are disabled.
+    bool
+    settle(Entry& entry, Tick now, Tick lifetimeTicks)
+    {
+        if (lifetimeTicks == 0) {
+            return true;
+        }
+        const uint64_t elapsed = now - entry.base;
+        const uint64_t windows = elapsed / lifetimeTicks;
+        if (windows == 0) {
+            return true;
+        }
+        if (windows > entry.reuse) {
+            entry.valid = false;
+            return false;
+        }
+        entry.reuse -= windows;
+        entry.base += windows * lifetimeTicks;
+        return true;
+    }
+
     Entry*
     lookup(Addr addr)
     {
@@ -165,10 +223,20 @@ class AANAdmissionTable
     }
 
     Entry*
-    allocate(Addr addr)
+    allocate(Addr addr, Tick now, Tick lifetimeTicks)
     {
         const int set = getSet(addr);
         const Addr tag = getTag(addr);
+
+        // Settle lifetimes across the set first so spent entries free
+        // their slots instead of competing with live candidates for LRU.
+        if (lifetimeTicks != 0) {
+            for (auto& entry : m_table[set]) {
+                if (entry.valid) {
+                    settle(entry, now, lifetimeTicks);
+                }
+            }
+        }
 
         for (auto& entry : m_table[set]) {
             if (!entry.valid) {
