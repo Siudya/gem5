@@ -255,6 +255,13 @@ def _checkpoint_at_switch(cpt_dir):
     print("Checkpoint written: %s" % cpt_dir)
 
 
+def _configure_linux_boot_addresses(workload, main_mem_base):
+    workload.load_addr_offset = main_mem_base
+    workload.dtb_addr = main_mem_base + 0x08000000
+    workload.initrd_addr = workload.dtb_addr + 0x200000
+    workload.cpu_release_addr = workload.dtb_addr - 8
+
+
 def _uses_switch_boot(args):
     return not args.bare_metal and not _uses_restore(args)
 
@@ -435,12 +442,13 @@ def create(args):
     system.connect()
     system.realview.setupBootLoader(system, SysPaths.binary)
 
-    # Bare-metal: override load_addr_offset so the ELF is loaded at its
-    # link address (0x80080000) unchanged.  setupBootLoader already set
-    # dtb_addr (0x88000000) and cpu_release_addr (0x87FFFFF8) which
-    # remain correct.
     if args.bare_metal:
+        # Preserve the existing bare-metal ELF link-address behavior.
         system.workload.load_addr_offset = 0
+    else:
+        _configure_linux_boot_addresses(
+            system.workload, system.mem_ranges[0].start
+        )
 
     # Keep the guest serial console in a dedicated outdir file so xmake can
     # tail it deterministically while still allowing interactive m5term use.
