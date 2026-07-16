@@ -330,7 +330,7 @@ let {{
     '''
     mrsIop = ArmInstObjParams("mrs", "Mrs64", "RegMiscRegImmOp64",
                               mrsCode,
-                              ["IsSerializeBefore"])
+                              ["IsSerializeBefore", "IsNonSpeculative"])
     header_output += RegMiscRegOp64Declare.subst(mrsIop)
     decoder_output += RegMiscRegOp64Constructor.subst(mrsIop)
     exec_output += BasicExecute.subst(mrsIop)
