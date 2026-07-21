@@ -783,6 +783,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool hasUseTimeout,           desc="Line is locked under store/use timeout";
     DataBlock dataBlk,            desc="Local copy of the line";
     DataBlock oldDataBlk,         desc="Local copy of the line before executing atomic";
+    bool isAtomicReturnValue, default="false", desc="dataBlk contains an atomic operation's old return value";
     WriteMask dataBlkValid,       desc="Marks which bytes in the DataBlock are valid";
     bool dataValid,               desc="Local copy is valid";
     bool dataAMOValid,            desc="Local copy is valid for AMO";

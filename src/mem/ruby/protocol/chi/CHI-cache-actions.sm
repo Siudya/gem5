@@ -307,6 +307,7 @@ action(Initiate_Request_Stale, desc="") {
   if (tbe.dir_ownerExists && tbe.dir_ownerIsExcl && is_valid(cache_entry)) {
     // treat the data we got from the cache as valid
     tbe.dataBlk := cache_entry.DataBlk;
+    tbe.isAtomicReturnValue := false;
     tbe.dataBlkValid.fillMask();
     tbe.dataValid := true;
   }
@@ -406,6 +407,7 @@ action(Initiate_Replacement, desc="") {
   // UD_RU line needs to be written back because the upstream may be in UC state.
   if (initial == State:UD_RU) {
     tbe.dataBlk := cache_entry.DataBlk;
+    tbe.isAtomicReturnValue := false;
     tbe.dataBlkValid.fillMask();
   }
 
@@ -2758,6 +2760,7 @@ action(ExpectComp, desc="") {
 action(WriteZero, desc="") {
   tbe.dataBlkValid.fillMask();
   tbe.dataBlk.clear();
+  tbe.isAtomicReturnValue := false;
 }
 
 action(Receive_ReqDataResp, desc="") {
@@ -2784,6 +2787,7 @@ action(Receive_ReqDataResp, desc="") {
         }
         tbe.oldDataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
         tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+        tbe.isAtomicReturnValue := in_msg.isAtomicReturnValue;
         assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
         tbe.dataBlkValid.orMask(in_msg.bitMask);
         if (tbe.dataBlkValid.isFull()) {
@@ -2831,6 +2835,7 @@ action(Receive_ReqDataResp, desc="") {
         }
         tbe.oldDataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
         tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+        tbe.isAtomicReturnValue := in_msg.isAtomicReturnValue;
         assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
         tbe.dataBlkValid.orMask(in_msg.bitMask);
         if (tbe.dataBlkValid.isFull()) {
@@ -2897,6 +2902,7 @@ action(Receive_ReqDataResp, desc="") {
           tbe.dataBlkValid.clear();
         }
         tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+        tbe.isAtomicReturnValue := in_msg.isAtomicReturnValue;
         assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
         tbe.dataBlkValid.orMask(in_msg.bitMask);
       }
@@ -2971,6 +2977,7 @@ action(Receive_SnpDataResp, desc="") {
         tbe.dataBlkValid.clear();
       }
       tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+      tbe.isAtomicReturnValue := in_msg.isAtomicReturnValue;
       assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
       tbe.dataBlkValid.orMask(in_msg.bitMask);
     }
@@ -3956,9 +3963,11 @@ action(Send_Data, desc="") {
     if ((tbe.reqType == CHIRequestType:AtomicReturn) &&
         (tbe.atomic_to_be_wb == false)){
         out_msg.dataBlk := tbe.oldDataBlk;
+        out_msg.isAtomicReturnValue := true;
     } else if (tbe.is_snp_amo && tbe.is_snp_amo_return) {
         // Delegato SnpAMO: send pre-atomic old data to requester
         out_msg.dataBlk := tbe.oldDataBlk;
+        out_msg.isAtomicReturnValue := true;
     } else {
         out_msg.dataBlk := tbe.dataBlk;
     }

@@ -231,10 +231,14 @@ structure(CHIDataMsg, desc="", interface="Message") {
   bool usesTxnId,       desc="True if using a Transaction ID", default="false";
   Addr txnId,           desc="Transaction ID", default="0";
   bool usesSlotId,      desc="True if txnId carries a far-AR local slot_id (route via slot index)", default="false";
+  bool isAtomicReturnValue, desc="Data is an atomic operation's old return value", default="false";
 
   MessageSizeType MessageSize, default="MessageSizeType_Data";
 
   bool functionalRead(Packet *pkt) {
+    if (isAtomicReturnValue) {
+      return false;
+    }
     if(bitMask.isFull()) {
       return testAndRead(addr, dataBlk, pkt);
     } else {
@@ -243,6 +247,9 @@ structure(CHIDataMsg, desc="", interface="Message") {
   }
 
   bool functionalRead(Packet *pkt, WriteMask &mask) {
+    if (isAtomicReturnValue) {
+      return false;
+    }
     // read if bitmask has bytes not in mask or if data is dirty
     bool is_dirty := (type == CHIDataType:CompData_UD_PD) ||
                     (type == CHIDataType:CompData_SD_PD) ||

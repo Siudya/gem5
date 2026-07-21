@@ -275,7 +275,7 @@ void functionalRead(Addr addr, Packet *pkt, WriteMask &mask) {
   bool dirty := false;
   bool from_tbe := false;
 
-  if (is_valid(tbe)) {
+  if (is_valid(tbe) && (tbe.isAtomicReturnValue == false)) {
     from_tbe := true;
     dirty := tbe.dataDirty;
     if (tbe.dataValid) {
@@ -300,7 +300,7 @@ void functionalRead(Addr addr, Packet *pkt, WriteMask &mask) {
             tbe.expected_snp_resp.receivedDataType(CHIDataType:SnpRespData_I_Fwded_SD_PD) ||
             tbe.expected_snp_resp.receivedDataType(CHIDataType:SnpRespData_I_PD_Fwded_SC);
     }
-  } else if (is_valid(cache_entry) &&
+  } else if ((is_valid(tbe) == false) && is_valid(cache_entry) &&
              ((Cache_State_to_permission(cache_entry.state) == AccessPermission:Read_Write) ||
               (Cache_State_to_permission(cache_entry.state) == AccessPermission:Read_Only))) {
     from_tbe := false;
@@ -552,6 +552,7 @@ void doAtomicLocal(TBE tbe) {
   tbe.oldDataBlk := tbe.dataBlk;
   tbe.dataBlk.atomicPartial(tbe.dataBlk, tbe.atomic_op);
   tbe.dataBlk.clearAtomicLogEntries();
+  tbe.isAtomicReturnValue := false;
   DPRINTF(RubySlicc, "After %s\n", tbe.dataBlk);
   tbe.dataValid := true;
   tbe.dataUnique := true;
@@ -1260,6 +1261,7 @@ MachineID getMiscNodeMachine() {
 void copyCacheAndDir(CacheEntry cache_entry, DirEntry dir_entry,
                      TBE tbe, State initialState) {
   assert(is_valid(tbe));
+  tbe.isAtomicReturnValue := false;
 
   // have dir entry
   if (is_valid(dir_entry)) {
@@ -1346,6 +1348,7 @@ void copyCacheAndDirTBEs(TBE src, TBE dst) {
   assert(is_valid(src));
   assert(is_valid(dst));
   dst.dataBlk := src.dataBlk;
+  dst.isAtomicReturnValue := src.isAtomicReturnValue;
   dst.dataBlkValid := src.dataBlkValid;
   dst.dataValid := src.dataValid;
   dst.dataDirty := src.dataDirty;
