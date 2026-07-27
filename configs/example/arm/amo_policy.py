@@ -13,6 +13,11 @@ always appended last:
 Static baselines (no AAN knobs):
     all-near-lat<N>   all-central-lat<N>   dynamo-lat<N>   delegato-lat<N>
 
+Motivation probe (naive boundary interception on the All-Central base;
+the only axis change vs all-central is AAN bypass -> near, i.e. admit-all
+boundary execution with a 16KiB array and no BAT filter):
+    all-central-aan-lat<N>
+
 DynAAN design point (BAT 256 entries, AAN cache 4KiB, BAT lifetime 5000):
     dynaan-lat<N>
 
@@ -64,6 +69,9 @@ PROTOCOL_AXES = {
     "all-central": ("unique-near", "bypass", "central"),
     "dynamo": ("dynamo", "bypass", "central"),
     "delegato": ("unique-near", "bypass", "delegato"),
+    # Motivation probe: All-Central plus naive (admit-all) boundary
+    # interception; differs from all-central only on the AAN axis.
+    "all-central-aan": ("unique-near", "near", "central"),
     "dynaan-nofilter": ("dynamo", "near", "central"),
     "dynaan-filter": ("dynamo", "filter", "central"),
 }
@@ -88,6 +96,10 @@ SHAPE_MAP = {
     "all-central": ("all-central", {}),
     "dynamo": ("dynamo", {}),
     "delegato": ("delegato", {}),
+    # Motivation probe: naive boundary interception on the All-Central
+    # base (admit-all, 16KiB array to keep capacity out of the picture;
+    # the BAT is bypassed in aan=near mode so its size is irrelevant).
+    "all-central-aan": ("all-central-aan", {"aan_cache_kib": 16}),
     # DynAAN design point: filter + BAT 256 + AAN cache 4KiB + lifetime 5000.
     "dynaan": ("dynaan-filter", dict(_DYNAAN_DP)),
     # A. BAT capacity sweep (c16k / lt5000 fixed so only the table moves).
