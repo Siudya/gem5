@@ -79,7 +79,8 @@ PROTOCOL_AXES = {
 # Canonical D2D link latencies (cycles) used to enumerate valid policy
 # names.  The performance/ablation experiments pin latency at 100; the
 # D2D-latency sweep uses the full set.
-LATENCIES = (1, 50, 100, 150, 200, 250, 300, 350)
+LATENCIES = (1, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600,
+             650, 700)
 
 # DynAAN design-point AAN knobs.
 _DYNAAN_DP = {
