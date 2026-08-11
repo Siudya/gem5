@@ -41,6 +41,7 @@
 #include "mem/ruby/network/garnet/CreditLink.hh"
 #include "mem/ruby/network/garnet/GarnetLink.hh"
 #include "mem/ruby/network/garnet/NetworkLink.hh"
+#include "mem/ruby/network/garnet/SerDesVcFlowControl.hh"
 #include "mem/ruby/network/garnet/flitBuffer.hh"
 #include "params/NetworkBridge.hh"
 
@@ -54,6 +55,7 @@ namespace garnet
 {
 
 class GarnetNetwork;
+class Credit;
 
 class NetworkBridge: public CreditLink
 {
@@ -63,15 +65,26 @@ class NetworkBridge: public CreditLink
     ~NetworkBridge();
 
     void initBridge(NetworkBridge *coBrid, bool cdc_en, bool serdes_en);
+    void setNetwork(GarnetNetwork *network);
 
-    void wakeup();
+    void wakeup() override;
     void neutralize(int vc, int eCredit);
+    bool decouplesVc(int vnet) const override;
+    void acceptLocalCredit(Credit *credit);
+    void enqueueD2DCredit(int vc);
 
     void scheduleFlit(flit *t_flit, Cycles latency);
     void flitisizeAndSend(flit *t_flit);
-    void setVcsPerVnet(uint32_t consumerVcs);
+    void setVcsPerVnet(uint32_t consumerVcs) override;
+
+    bool functionalRead(Packet *pkt, WriteMask &mask) override;
+    uint32_t functionalWrite(Packet *pkt) override;
 
   protected:
+    void configureD2DBuffers();
+    void scheduleD2DFlit(flit *t_flit, Cycles latency);
+    bool sendFromD2DBuffer();
+
     // Pointer to co-existing bridge
     // CreditBridge for Network Bridge and vice versa
     NetworkBridge *coBridge;
@@ -93,6 +106,15 @@ class NetworkBridge: public CreditLink
     Cycles serDesLatency;
 
     Tick lastScheduledAt;
+    Tick lastD2DReadyAt;
+    GarnetNetwork *network;
+    uint32_t vcsPerVnet;
+    bool d2dBuffersConfigured;
+
+    std::vector<flitBuffer> perVcBuffers;
+    std::vector<flit_type> d2dHeadTypes;
+    std::vector<bool> d2dHasHead;
+    SerDesVcFlowControl d2dFlow;
 
     // Used by Credit Deserializer
     std::vector<int> lenBuffer;

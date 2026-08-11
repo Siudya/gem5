@@ -100,7 +100,7 @@ OutputUnit::has_free_vc(int vnet)
 {
     int vc_base = vnet*m_vc_per_vnet;
     for (int vc = vc_base; vc < vc_base + m_vc_per_vnet; vc++) {
-        if (is_vc_idle(vc, curTick()))
+        if (is_vc_idle(vc, curTick()) && outVcState[vc].has_credit())
             return true;
     }
 
@@ -113,7 +113,7 @@ OutputUnit::select_free_vc(int vnet)
 {
     int vc_base = vnet*m_vc_per_vnet;
     for (int vc = vc_base; vc < vc_base + m_vc_per_vnet; vc++) {
-        if (is_vc_idle(vc, curTick())) {
+        if (is_vc_idle(vc, curTick()) && outVcState[vc].has_credit()) {
             outVcState[vc].setState(ACTIVE_, curTick());
             return vc;
         }
@@ -171,6 +171,12 @@ OutputUnit::insert_flit(flit *t_flit)
 {
     outBuffer.insert(t_flit);
     m_out_link->scheduleEventAbsolute(m_router->clockEdge(Cycles(1)));
+
+    if ((t_flit->get_type() == TAIL_ ||
+         t_flit->get_type() == HEAD_TAIL_) &&
+        m_out_link->decouplesVc(t_flit->get_vnet())) {
+        set_vc_state(IDLE_, t_flit->get_vc(), curTick());
+    }
 }
 
 bool

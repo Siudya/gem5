@@ -340,6 +340,8 @@ GarnetNetwork::makeInternalLink(SwitchID src, SwitchID dest, BasicLink* link,
         DPRINTF(RubyNetwork, "Enable destination bridge for %s\n",
             garnet_link->name());
         NetworkBridge *n_bridge = garnet_link->dstNetBridge;
+        n_bridge->setNetwork(this);
+        garnet_link->dstCredBridge->setNetwork(this);
         m_routers[dest]->addInPort(dst_inport_dirn, n_bridge,
                                    garnet_link->dstCredBridge);
         m_networkbridges.push_back(n_bridge);
@@ -351,6 +353,8 @@ GarnetNetwork::makeInternalLink(SwitchID src, SwitchID dest, BasicLink* link,
         DPRINTF(RubyNetwork, "Enable source bridge for %s\n",
             garnet_link->name());
         NetworkBridge *n_bridge = garnet_link->srcNetBridge;
+        n_bridge->setNetwork(this);
+        garnet_link->srcCredBridge->setNetwork(this);
         m_routers[src]->
             addOutPort(src_outport_dirn, n_bridge,
                        routing_table_entry,
@@ -657,6 +661,10 @@ GarnetNetwork::functionalWrite(Packet *pkt)
 
     for (unsigned int i = 0; i < m_networklinks.size(); ++i) {
         num_functional_writes += m_networklinks[i]->functionalWrite(pkt);
+    }
+
+    for (unsigned int i = 0; i < m_networkbridges.size(); ++i) {
+        num_functional_writes += m_networkbridges[i]->functionalWrite(pkt);
     }
 
     return num_functional_writes;

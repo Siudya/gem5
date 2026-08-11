@@ -58,8 +58,8 @@ class NetworkLink(ClockedObject):
     buffer_depth = Param.UInt32(
         0,
         "receiver credit depth override for this link's consumer "
-        "(flits per VC); 0 = network default. Long links without a "
-        "SerDes bridge need >= 2*latency+2 to cover the credit RTT.",
+        "(flits per VC); 0 = network default. A decoupling SerDes bridge "
+        "uses the same value for its destination per-VC FIFO depth.",
     )
 
 
@@ -109,6 +109,9 @@ class GarnetIntLink(BasicIntLink):
     # supports a different flit width.
     src_serdes = Param.Bool(False, "Enable Serializer-Deserializer")
     dst_serdes = Param.Bool(False, "Enable Serializer-Deserializer")
+    serdes_vc_buffer_depth = Param.UInt32(
+        0, "destination SerDes FIFO depth in logical flits per VC"
+    )
 
     # The network bridge encapsulates both the CDC and Ser-Des
     # units in HeteroGarnet. This is automatically enabled when

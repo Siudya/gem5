@@ -86,12 +86,13 @@ class CustomMesh(SimpleTopology):
                 # width units are bytes (ni_flit_size is in bytes).
                 # When the D2D width equals the mesh width (32B ablation
                 # point) the SerDes would assert on equal widths, so the
-                # link is created plain. A bridged link needs no credit
-                # override (the bridge's unbounded internal buffer decouples
-                # the credit loop); a plain long link does, or the
-                # 2*latency-cycle credit round trip throttles it to
-                # buffer_depth/RTT of line rate.
+                # link is created plain. SerDes links get a per-VC bridge
+                # depth below; equal-width long links retain the existing
+                # network-link buffer-depth override.
                 serdes = cross_link_width != mesh_link_width
+                serdes_vc_buffer_depth = (
+                    2 * cross_link_latency + 2 if serdes else 0
+                )
                 link = IntLink(
                     link_id=self._link_count,
                     src_node=self._routers[src],
@@ -102,6 +103,7 @@ class CustomMesh(SimpleTopology):
                     width=cross_link_width,
                     src_serdes=serdes,
                     dst_serdes=serdes,
+                    serdes_vc_buffer_depth=serdes_vc_buffer_depth,
                 )
                 if not serdes:
                     link.network_link.buffer_depth = (

@@ -53,3 +53,7 @@ Source('flitBuffer.cc')
 Source('flit.cc')
 Source('Credit.cc')
 Source('NetworkBridge.cc')
+Source('SerDesVcFlowControl.cc')
+
+GTest('SerDesVcFlowControl.test', 'SerDesVcFlowControl.test.cc',
+      'SerDesVcFlowControl.cc')

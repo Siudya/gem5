@@ -179,6 +179,7 @@ def init_network(options, network, InterfaceClass):
                 link=intLink.network_link,
                 vtype="OBJECT_LINK",
                 width=intLink.src_node.width,
+                buffer_depth=intLink.serdes_vc_buffer_depth,
             )
             intLink.src_cred_bridge = NetworkBridge(
                 link=intLink.credit_link,
@@ -189,6 +190,7 @@ def init_network(options, network, InterfaceClass):
                 link=intLink.network_link,
                 vtype="LINK_OBJECT",
                 width=intLink.dst_node.width,
+                buffer_depth=intLink.serdes_vc_buffer_depth,
             )
             intLink.dst_cred_bridge = NetworkBridge(
                 link=intLink.credit_link,

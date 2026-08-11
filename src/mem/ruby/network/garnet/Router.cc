@@ -130,7 +130,7 @@ Router::addOutPort(PortDirection outport_dirn,
 
     int port_num = m_output_unit.size();
     // out_link->bufferDepth > 0 overrides the receiver credit depth for
-    // this port (long non-bridged links need >= 2*latency+2 credits).
+    // this port. A decoupling SerDes bridge exposes its FIFO depth here.
     OutputUnit *output_unit = new OutputUnit(port_num, outport_dirn, this,
                                              consumerVcs,
                                              out_link->bufferDepth);

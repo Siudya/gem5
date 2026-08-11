@@ -54,9 +54,8 @@ OutVcState::OutVcState(int id, GarnetNetwork *network_ptr,
      */
     int vnet = floor(id/consumerVcs);
 
-    if (creditOverride > 0) {
-        // Per-link receiver credit override: long links without a SerDes
-        // bridge need enough credits to cover the credit round trip.
+    if (creditOverride > 0 && !network_ptr->isVNetOrdered(vnet)) {
+        // Ordered vnets retain Garnet's end-to-end VC ownership semantics.
         m_max_credit_count = creditOverride;
     } else if (network_ptr->get_vnet_type(vnet) == DATA_VNET_) {
         m_max_credit_count = network_ptr->getBuffersPerDataVC();

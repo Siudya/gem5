@@ -69,6 +69,7 @@ class NetworkLink : public ClockedObject, public Consumer
     int get_id() const { return m_id; }
     flitBuffer *getBuffer() { return &linkBuffer;}
     virtual void wakeup();
+    virtual bool decouplesVc(int vnet) const { return false; }
 
     unsigned int getLinkUtilization() const { return m_link_utilized; }
     const std::vector<unsigned int> & getVcLoad() const { return m_vc_load; }
@@ -81,17 +82,15 @@ class NetworkLink : public ClockedObject, public Consumer
     inline flit* peekLink() { return linkBuffer.peekTopFlit(); }
     inline flit* consumeLink() { return linkBuffer.getTopFlit(); }
 
-    bool functionalRead(Packet *pkt, WriteMask &mask);
-    uint32_t functionalWrite(Packet *);
+    virtual bool functionalRead(Packet *pkt, WriteMask &mask);
+    virtual uint32_t functionalWrite(Packet *);
     void resetStats();
 
     std::vector<int> mVnets;
     uint32_t bitWidth;
     // Receiver credit depth override (flits per VC) for this link's
-    // consumer; 0 selects the network default. Long links without a
-    // SerDes bridge need >= 2*latency+2 credits to cover the credit
-    // round trip (a bridge decouples the loop with its unbounded
-    // internal buffer, so bridged links don't need this).
+    // consumer; 0 selects the network default. A decoupling SerDes bridge
+    // uses the same value for its destination per-VC FIFO depth.
     uint32_t bufferDepth;
 
   private:

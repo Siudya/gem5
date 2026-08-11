@@ -32,9 +32,12 @@
 
 #include "mem/ruby/network/garnet/NetworkBridge.hh"
 
+#include <algorithm>
 #include <cmath>
 
 #include "debug/RubyNetwork.hh"
+#include "mem/ruby/network/garnet/Credit.hh"
+#include "mem/ruby/network/garnet/GarnetNetwork.hh"
 #include "params/GarnetIntLink.hh"
 
 namespace gem5
@@ -47,17 +50,12 @@ namespace garnet
 {
 
 NetworkBridge::NetworkBridge(const Params &p)
-    :CreditLink(p)
+    : CreditLink(p), coBridge(nullptr), nLink(p.link), enCdc(true),
+      enSerDes(true), mType(p.vtype), cdcLatency(p.cdc_latency),
+      serDesLatency(p.serdes_latency), lastScheduledAt(0),
+      lastD2DReadyAt(0), network(nullptr), vcsPerVnet(0),
+      d2dBuffersConfigured(false)
 {
-    enCdc = true;
-    enSerDes = true;
-    mType = p.vtype;
-
-    cdcLatency = p.cdc_latency;
-    serDesLatency = p.serdes_latency;
-    lastScheduledAt = 0;
-
-    nLink = p.link;
     if (mType == enums::LINK_OBJECT) {
         nLink->setLinkConsumer(this);
         setSourceQueue(nLink->getBuffer(), nLink);
@@ -75,12 +73,14 @@ NetworkBridge::setVcsPerVnet(uint32_t consumerVcs)
 {
     DPRINTF(RubyNetwork, "VcsPerVnet VC: %d\n", consumerVcs);
     NetworkLink::setVcsPerVnet(consumerVcs);
+    vcsPerVnet = consumerVcs;
     lenBuffer.resize(consumerVcs * m_virt_nets);
     sizeSent.resize(consumerVcs * m_virt_nets);
     flitsSent.resize(consumerVcs * m_virt_nets);
     extraCredit.resize(consumerVcs * m_virt_nets);
 
     nLink->setVcsPerVnet(consumerVcs);
+    configureD2DBuffers();
 }
 
 void
@@ -89,6 +89,53 @@ NetworkBridge::initBridge(NetworkBridge *coBrid, bool cdc_en, bool serdes_en)
     coBridge = coBrid;
     enCdc = cdc_en;
     enSerDes = serdes_en;
+    configureD2DBuffers();
+}
+
+void
+NetworkBridge::setNetwork(GarnetNetwork *network_ptr)
+{
+    network = network_ptr;
+    configureD2DBuffers();
+}
+
+bool
+NetworkBridge::decouplesVc(int vnet) const
+{
+    return bufferDepth > 0 && enSerDes && network != nullptr &&
+        vnet >= 0 && static_cast<uint32_t>(vnet) < m_virt_nets &&
+        !network->isVNetOrdered(vnet);
+}
+
+void
+NetworkBridge::configureD2DBuffers()
+{
+    if (d2dBuffersConfigured || mType != enums::LINK_OBJECT ||
+        bufferDepth == 0 || !enSerDes || network == nullptr ||
+        vcsPerVnet == 0) {
+        return;
+    }
+
+    const unsigned total_vcs = vcsPerVnet * m_virt_nets;
+    std::vector<unsigned> local_credits(total_vcs);
+    for (unsigned vnet = 0; vnet < m_virt_nets; ++vnet) {
+        const unsigned credits =
+            network->get_vnet_type(vnet) == DATA_VNET_ ?
+            network->getBuffersPerDataVC() :
+            network->getBuffersPerCtrlVC();
+        for (unsigned offset = 0; offset < vcsPerVnet; ++offset) {
+            local_credits[vnet * vcsPerVnet + offset] = credits;
+        }
+    }
+
+    perVcBuffers.resize(total_vcs);
+    for (auto &buffer : perVcBuffers) {
+        buffer.setMaxSize(bufferDepth);
+    }
+    d2dHeadTypes.assign(total_vcs, CREDIT_);
+    d2dHasHead.assign(total_vcs, false);
+    d2dFlow.configure(bufferDepth, local_credits);
+    d2dBuffersConfigured = true;
 }
 
 NetworkBridge::~NetworkBridge()
@@ -116,8 +163,84 @@ NetworkBridge::scheduleFlit(flit *t_flit, Cycles latency)
 }
 
 void
+NetworkBridge::scheduleD2DFlit(flit *t_flit, Cycles latency)
+{
+    assert(d2dBuffersConfigured);
+    const int vc = t_flit->get_vc();
+    assert(decouplesVc(t_flit->get_vnet()));
+    assert(d2dFlow.hasSpace(vc));
+
+    Tick ready_time = clockEdge(latency);
+    const Tick next_ready = lastD2DReadyAt + cyclesToTicks(Cycles(1));
+    ready_time = std::max(next_ready, ready_time);
+    lastD2DReadyAt = ready_time;
+
+    t_flit->set_time(ready_time);
+    perVcBuffers[vc].insert(t_flit);
+    d2dFlow.enqueue(vc);
+    scheduleEventAbsolute(ready_time);
+}
+
+void
+NetworkBridge::acceptLocalCredit(Credit *credit)
+{
+    assert(d2dBuffersConfigured);
+    const int vc = credit->get_vc();
+    const int vnet = vc / vcsPerVnet;
+    assert(decouplesVc(vnet));
+
+    d2dFlow.returnLocalCredit(vc, credit->is_free_signal());
+    scheduleEvent(Cycles(1));
+}
+
+void
+NetworkBridge::enqueueD2DCredit(int vc)
+{
+    assert(coBridge != nullptr);
+    assert(vcsPerVnet > 0);
+    assert(vc >= 0 && static_cast<unsigned>(vc) < extraCredit.size());
+    assert(coBridge->decouplesVc(vc / vcsPerVnet));
+    assert(!extraCredit[vc].empty());
+    flitisizeAndSend(new Credit(vc, false, curTick()));
+}
+
+bool
+NetworkBridge::sendFromD2DBuffer()
+{
+    if (!d2dBuffersConfigured) {
+        return false;
+    }
+
+    std::fill(d2dHeadTypes.begin(), d2dHeadTypes.end(), CREDIT_);
+    std::fill(d2dHasHead.begin(), d2dHasHead.end(), false);
+    for (unsigned vc = 0; vc < perVcBuffers.size(); ++vc) {
+        if (perVcBuffers[vc].isReady(curTick())) {
+            flit *head = perVcBuffers[vc].peekTopFlit();
+            if (decouplesVc(head->get_vnet())) {
+                d2dHeadTypes[vc] = head->get_type();
+                d2dHasHead[vc] = true;
+            }
+        }
+    }
+
+    const int vc = d2dFlow.select(d2dHeadTypes, d2dHasHead);
+    if (vc < 0) {
+        return false;
+    }
+
+    flit *t_flit = perVcBuffers[vc].getTopFlit();
+    d2dFlow.sent(vc, t_flit->get_type());
+    scheduleFlit(t_flit, Cycles(0));
+    assert(coBridge != nullptr);
+    coBridge->enqueueD2DCredit(vc);
+    return true;
+}
+
+void
 NetworkBridge::neutralize(int vc, int eCredit)
 {
+    assert(vc >= 0 && static_cast<unsigned>(vc) < extraCredit.size());
+    assert(eCredit > 0);
     extraCredit[vc].push(eCredit);
 }
 
@@ -198,7 +321,12 @@ NetworkBridge::flitisizeAndSend(flit *t_flit)
             if (fl) {
                 DPRINTF(RubyNetwork, "Scheduling a flit\n");
                 lenBuffer[vc] = 0;
-                scheduleFlit(fl, serDesLatency);
+                if (mType == enums::LINK_OBJECT &&
+                    decouplesVc(fl->get_vnet())) {
+                    scheduleD2DFlit(fl, serDesLatency);
+                } else {
+                    scheduleFlit(fl, serDesLatency);
+                }
             }
             // Delete this flit, new flit is sent in any case
             delete t_flit;
@@ -238,7 +366,12 @@ NetworkBridge::flitisizeAndSend(flit *t_flit)
             for (int i = 0; i < flitPossible; i++) {
                 // Ignore neutralized credits
                 flit *fl = t_flit->serialize(i, flitPossible, target_width);
-                scheduleFlit(fl, serDesLatency);
+                if (mType == enums::LINK_OBJECT &&
+                    decouplesVc(fl->get_vnet())) {
+                    scheduleD2DFlit(fl, serDesLatency);
+                } else {
+                    scheduleFlit(fl, serDesLatency);
+                }
                 DPRINTF(RubyNetwork, "Serialized to flit[%d of %d parts]:"
                 " %s\n", i+1, flitPossible, *fl);
             }
@@ -263,13 +396,49 @@ NetworkBridge::wakeup()
     if (link_srcQueue->isReady(curTick())) {
         t_flit = link_srcQueue->getTopFlit();
         DPRINTF(RubyNetwork, "Recieved flit %s\n", *t_flit);
-        flitisizeAndSend(t_flit);
+        const bool is_local_credit =
+            t_flit->get_type() == CREDIT_ &&
+            mType == enums::OBJECT_LINK && coBridge != nullptr &&
+            vcsPerVnet > 0 &&
+            coBridge->decouplesVc(t_flit->get_vc() / vcsPerVnet);
+        if (is_local_credit) {
+            coBridge->acceptLocalCredit(static_cast<Credit *>(t_flit));
+            delete t_flit;
+        } else {
+            flitisizeAndSend(t_flit);
+        }
+    }
+
+    if (sendFromD2DBuffer()) {
+        scheduleEvent(Cycles(1));
     }
 
     // Reschedule in case there is a waiting flit.
     if (!link_srcQueue->isEmpty()) {
         scheduleEvent(Cycles(1));
     }
+}
+
+bool
+NetworkBridge::functionalRead(Packet *pkt, WriteMask &mask)
+{
+    bool read = NetworkLink::functionalRead(pkt, mask);
+    for (auto &buffer : perVcBuffers) {
+        if (buffer.functionalRead(pkt, mask)) {
+            read = true;
+        }
+    }
+    return read;
+}
+
+uint32_t
+NetworkBridge::functionalWrite(Packet *pkt)
+{
+    uint32_t writes = NetworkLink::functionalWrite(pkt);
+    for (auto &buffer : perVcBuffers) {
+        writes += buffer.functionalWrite(pkt);
+    }
+    return writes;
 }
 
 } // namespace garnet
