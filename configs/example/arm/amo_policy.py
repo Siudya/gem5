@@ -16,7 +16,12 @@ Static baselines (no AAN knobs):
 Motivation probe (naive boundary interception on the All-Central base;
 the only axis change vs all-central is AAN bypass -> near, i.e. admit-all
 boundary execution with a 16KiB array and no BAT filter):
-    all-central-aan-lat<N>
+    naiveaan-lat<N>
+
+CAT probe (CAT-filtered boundary interception on the All-Central base;
+differs from naiveaan only on the AAN axis, near -> filter, with the
+design-point BAT so the naiveaan/cataan delta isolates the CAT):
+    cataan-lat<N>
 
 DynAAN design point (BAT 256 entries, AAN cache 4KiB, BAT lifetime 5000):
     dynaan-lat<N>
@@ -71,7 +76,10 @@ PROTOCOL_AXES = {
     "delegato": ("unique-near", "bypass", "delegato"),
     # Motivation probe: All-Central plus naive (admit-all) boundary
     # interception; differs from all-central only on the AAN axis.
-    "all-central-aan": ("unique-near", "near", "central"),
+    "naiveaan": ("unique-near", "near", "central"),
+    # CAT probe: All-Central plus CAT-filtered boundary interception;
+    # differs from naiveaan only on the AAN axis (near -> filter).
+    "cataan": ("unique-near", "filter", "central"),
     "dynaan-nofilter": ("dynamo", "near", "central"),
     "dynaan-filter": ("dynamo", "filter", "central"),
 }
@@ -100,7 +108,11 @@ SHAPE_MAP = {
     # Motivation probe: naive boundary interception on the All-Central
     # base (admit-all, 16KiB array to keep capacity out of the picture;
     # the BAT is bypassed in aan=near mode so its size is irrelevant).
-    "all-central-aan": ("all-central-aan", {"aan_cache_kib": 16}),
+    "naiveaan": ("naiveaan", {"aan_cache_kib": 4}),
+    # CAT probe: same base and array, AAN axis near -> filter with the
+    # design-point BAT (256 entries, lt5000), so cataan-vs-naiveaan
+    # isolates exactly the CAT's contribution.
+    "cataan": ("cataan", {"aan_bat_entries": 256, "aan_cache_kib": 4, "aan_bat_lifetime_cycles": 5000}),
     # DynAAN design point: filter + BAT 256 + AAN cache 4KiB + lifetime 5000.
     "dynaan": ("dynaan-filter", dict(_DYNAAN_DP)),
     # A. BAT capacity sweep (c16k / lt5000 fixed so only the table moves).
