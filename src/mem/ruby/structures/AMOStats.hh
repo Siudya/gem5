@@ -30,6 +30,7 @@
 #define __MEM_RUBY_STRUCTURES_AMO_STATS_HH__
 
 #include "base/statistics.hh"
+#include "base/types.hh"
 
 namespace gem5
 {
@@ -58,6 +59,25 @@ class AMOStats
     void incAmoFetch() { ++stats.amoFetch; }
     void incLocalReuse() { ++stats.localReuse; }
 
+    // Per-execution-path AMO latency (issue at the L1 sequencer to old-value
+    // return). The path index mirrors recordAMOPathLatency() in
+    // CHI-cache-funcs.sm; keep both in sync with PATH_NAMES below.
+    void
+    recordPathLatency(int path, Tick lat)
+    {
+        if (path < 0 || path >= NUM_PATHS) {
+            path = 0;
+        }
+        stats.pathLatTicks[path] += lat;
+        ++stats.pathLatCount[path];
+    }
+
+    static constexpr int NUM_PATHS = 9;
+    static constexpr const char* PATH_NAMES[NUM_PATHS] = {
+        "None", "NearL1", "NearL2", "Central", "CentralViaAAN",
+        "ProxiedHit", "ProxiedFill", "Migrate", "Delegate",
+    };
+
   private:
     struct AMOStatsGroup : public statistics::Group
     {
@@ -78,8 +98,22 @@ class AMOStats
               ADD_STAT(localReuse, "AMO-fetched cacheline residencies reused by a later local access"),
               ADD_STAT(placementTotal, "AMOs classified by execution placement",
                        nearL1AMO + nearL2AMO + centralize + migrate +
-                       delegate + aanAMO)
-        {}
+                       delegate + aanAMO),
+              ADD_STAT(pathLatTicks,
+                       "Sum of issue-to-old-data latency per execution path "
+                       "(ticks)"),
+              ADD_STAT(pathLatCount,
+                       "Sequencer AMO completions per execution path")
+        {
+            pathLatTicks.init(NUM_PATHS);
+            pathLatCount.init(NUM_PATHS);
+            for (int i = 0; i < NUM_PATHS; ++i) {
+                pathLatTicks.subname(i, PATH_NAMES[i]);
+                pathLatCount.subname(i, PATH_NAMES[i]);
+            }
+            pathLatTicks.flags(statistics::nozero);
+            pathLatCount.flags(statistics::nozero);
+        }
 
         statistics::Scalar coreAtomicLoad;
         statistics::Scalar nearL1AMO;
@@ -95,6 +129,8 @@ class AMOStats
         statistics::Scalar amoFetch;
         statistics::Scalar localReuse;
         statistics::Formula placementTotal;
+        statistics::Vector pathLatTicks;
+        statistics::Vector pathLatCount;
     } stats;
 };
 

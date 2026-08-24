@@ -792,6 +792,25 @@ TBE allocateRequestTBE(Addr addr, CHIRequestMsg in_msg), return_by_pointer="yes"
   tbe.requestor := in_msg.requestor;
   tbe.reqType := in_msg.type;
 
+  // AMO attribution: inherit the causal tag from the incoming request; start
+  // the chain (and the per-path latency clock) when the request is an atomic,
+  // whether the sequencer's own or one arriving on the wire. An AAN TBE is
+  // always tagged: everything an AAN does is on some AMO's behalf.
+  tbe.amoTagged := in_msg.amoTagged;
+  tbe.viaAAN := in_msg.viaAAN;
+  if ((in_msg.type == CHIRequestType:AtomicLoad) ||
+      (in_msg.type == CHIRequestType:AtomicStore) ||
+      (in_msg.type == CHIRequestType:AtomicReturn) ||
+      (in_msg.type == CHIRequestType:AtomicNoReturn)) {
+    tbe.amoTagged := true;
+    if (fromSequencer(in_msg.type)) {
+      tbe.amoIssueTick := curTick();
+    }
+  }
+  if (is_AAN) {
+    tbe.amoTagged := true;
+  }
+
   tbe.isSeqReqValid := in_msg.isSeqReqValid;
   tbe.seqReq := in_msg.seqReq;
   tbe.is_local_pf := in_msg.is_local_pf;
@@ -872,6 +891,9 @@ TBE allocateSnoopTBE(Addr addr, CHIRequestMsg in_msg), return_by_pointer="yes" {
   tbe.fwdRequestor := in_msg.fwdRequestor;
   tbe.reqType := in_msg.type;
   tbe.txnId := in_msg.txnId;
+  // AMO attribution: snoops caused by a tagged request carry the tag; the
+  // snooped cache's responses inherit it here.
+  tbe.amoTagged := in_msg.amoTagged;
   // far-AR SnpAMO: in_msg.txnId carries the original requester's slot_id and
   // usesSlotId says owner->requester responses must echo it. Record the intent
   // so Send_SnpAMODBIDResp/Send_SnpAMOCompData route via the slot index.
@@ -886,6 +908,10 @@ TBE allocateSnoopTBE(Addr addr, CHIRequestMsg in_msg), return_by_pointer="yes" {
     tbe.accSize := in_msg.accSize;
     tbe.atomic_op := in_msg.atomic_op;
     tbe.is_snp_amo_return := in_msg.retToSrc;
+    // Delegated execution happens here, at the owning core; the old-value
+    // data this snoop TBE returns reports the Delegate path.
+    tbe.amoTagged := true;
+    tbe.amoExecPath := AMOExecPath:Delegate;
     DPRINTF(RubySlicc, "allocateSnoopTBE: SnpAMO addr=%#x fwdReq=%d return=%d\n",
             addr, in_msg.fwdRequestor, tbe.is_snp_amo_return);
   }
@@ -931,6 +957,10 @@ TBE _allocateReplacementTBE(Addr addr, int storSlot), return_by_pointer="yes" {
   initializeTBE(tbe, addr, storSlot);
   tbe.slot_id := makeSlotId(3, storSlot);
   replTBEs.registerSlot(tbe.slot_id, addr);
+  // An AAN holds only AMO lines, so its evictions are AMO traffic (T4).
+  if (is_AAN) {
+    tbe.amoTagged := true;
+  }
 
   assert(tbe.is_req_tbe == false);
   assert(tbe.is_snp_tbe == false);
@@ -1033,6 +1063,45 @@ void setupPendingSend_AR(TBE tbe) {
 }
 
 // common code for downstream requests
+// Central execution point: report which flavor of Centralized this is for
+// the per-path AMO latency breakdown (evaluation only).
+AMOExecPath centralExecPath(TBE tbe) {
+  if (tbe.viaAAN) {
+    return AMOExecPath:CentralViaAAN;
+  }
+  return AMOExecPath:Central;
+}
+
+// Record issue-to-old-data latency for a sequencer AMO, attributed to the
+// endpoint that executed it. Fires once per TBE (the clock is cleared).
+// The path is passed to AMOStats as an int because the AMOStats structure
+// is declared in RubySlicc_Types.sm, before this protocol's enums exist;
+// keep the mapping in sync with AMOStats.hh PATH_NAMES.
+void recordAMOPathLatency(TBE tbe) {
+  if (tbe.amoIssueTick != intToTick(0)) {
+    int p := 0;
+    if (tbe.amoExecPath == AMOExecPath:NearL1) {
+      p := 1;
+    } else if (tbe.amoExecPath == AMOExecPath:NearL2) {
+      p := 2;
+    } else if (tbe.amoExecPath == AMOExecPath:Central) {
+      p := 3;
+    } else if (tbe.amoExecPath == AMOExecPath:CentralViaAAN) {
+      p := 4;
+    } else if (tbe.amoExecPath == AMOExecPath:ProxiedHit) {
+      p := 5;
+    } else if (tbe.amoExecPath == AMOExecPath:ProxiedFill) {
+      p := 6;
+    } else if (tbe.amoExecPath == AMOExecPath:Migrate) {
+      p := 7;
+    } else if (tbe.amoExecPath == AMOExecPath:Delegate) {
+      p := 8;
+    }
+    amoStats.recordPathLatency(p, curTick() - tbe.amoIssueTick);
+    tbe.amoIssueTick := intToTick(0);
+  }
+}
+
 void prepareRequest(TBE tbe, CHIRequestType type, CHIRequestMsg & out_msg) {
   out_msg.addr := tbe.addr;
   out_msg.accAddr := tbe.addr;
@@ -1040,6 +1109,8 @@ void prepareRequest(TBE tbe, CHIRequestType type, CHIRequestMsg & out_msg) {
   out_msg.requestor := machineID;
   out_msg.fwdRequestor := tbe.requestor;
   out_msg.type := type;
+  out_msg.amoTagged := tbe.amoTagged;
+  out_msg.viaAAN := tbe.viaAAN;
   out_msg.allowRetry := false;
   tbe.pendReqAllowRetry := false;
   tbe.rcvdRetryAck := false;
@@ -1083,6 +1154,8 @@ void prepareRequestRetry(TBE tbe, CHIRequestMsg & out_msg) {
   out_msg.addr := tbe.addr;
   out_msg.requestor := machineID;
   out_msg.fwdRequestor := tbe.requestor;
+  out_msg.amoTagged := tbe.amoTagged;
+  out_msg.viaAAN := tbe.viaAAN;
   out_msg.accAddr := tbe.pendReqAccAddr;
   out_msg.accSize := tbe.pendReqAccSize;
   out_msg.type := tbe.pendReqType;

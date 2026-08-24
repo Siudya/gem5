@@ -85,6 +85,21 @@ class NetworkBridge: public CreditLink
     void scheduleD2DFlit(flit *t_flit, Cycles latency);
     bool sendFromD2DBuffer();
 
+    // Traffic accounting (evaluation): messages and protocol bytes this
+    // bridge pushes toward its link, per vnet, total and AMO-tagged
+    // (Message::getAmoTagged). Counted once per message, on the head flit,
+    // at the source-side (OBJECT_LINK) bridge before width conversion.
+    // Extraction scripts select the bridges of cross-die links by topology.
+    struct BridgeTrafficStats : public statistics::Group
+    {
+        BridgeTrafficStats(statistics::Group *parent, uint32_t vnets);
+        statistics::Vector d2dMsgsTotal;
+        statistics::Vector d2dBytesTotal;
+        statistics::Vector d2dAmoMsgs;
+        statistics::Vector d2dAmoBytes;
+    } bridgeTrafficStats;
+    void recordD2DMsg(flit *t_flit);
+
     // Pointer to co-existing bridge
     // CreditBridge for Network Bridge and vice versa
     NetworkBridge *coBridge;

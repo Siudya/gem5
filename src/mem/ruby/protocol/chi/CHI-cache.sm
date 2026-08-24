@@ -848,6 +848,12 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     // AAN hit/fill: set when AAN executes atomic locally
     bool is_aan_hit, default="false", desc="AAN: executing atomic locally (hit or fill path)";
     bool aan_fill_read_unique, default="false", desc="AAN fill: downstream ownership is fetched with ReadUnique";
+
+    // AMO traffic attribution + per-path latency (evaluation only).
+    bool amoTagged, default="false", desc="TBE serves an AMO's causal chain; emitted messages inherit";
+    bool viaAAN, default="false", desc="Request reached this node through an AAN bypass";
+    Tick amoIssueTick, default="0", desc="Sequencer AMO issue time at the L1 (0 = not a seq AMO)";
+    AMOExecPath amoExecPath, default="AMOExecPath_None", desc="Endpoint that executed this AMO";
     bool is_delegato_migrate, default="false", desc="Delegato: requester received unique data for local AtomicReturn";
 
     // Flag-driven AtomicReturn edges. One flag per half-transaction edge; a

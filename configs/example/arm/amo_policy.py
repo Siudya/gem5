@@ -5,10 +5,12 @@
 
 Unified policy naming.  Every runnable policy name carries an explicit
 D2D cross-die link-latency suffix ``-lat<N>`` (cycles); there are no bare
-aliases.  The latency axis is orthogonal to every other knob, so it is
-always appended last:
+aliases.  A non-default D2D link width is an optional final suffix:
 
-    <stem>-lat<N>
+    <stem>-lat<N>[-bw<W>]
+
+Omitting ``-bw<W>`` selects the platform default of 64 B/flit.  Canonical
+non-default widths are 4, 8, 16, and 32 B/flit.
 
 Static baselines (no AAN knobs):
     all-near-lat<N>   all-central-lat<N>   dynamo-lat<N>   delegato-lat<N>
@@ -35,7 +37,6 @@ all at c16k/bat2048 unless swept):
 
 ``bat0`` is special: it maps to aan_policy=near (admit-all, the BAT filter
 is bypassed) rather than filter -- the "No Filter" end of the BAT sweep.
-D2D link *width* is fixed at 64B/flit and is no longer an ablation axis.
 """
 
 from dataclasses import dataclass
@@ -89,6 +90,10 @@ PROTOCOL_AXES = {
 # D2D-latency sweep uses the full set.
 LATENCIES = (1, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600,
              650, 700)
+
+# Non-default D2D link widths (bytes/flit). Width 64 is represented by an
+# omitted suffix so existing policy names and output directories stay stable.
+BANDWIDTH_WIDTHS = (4, 8, 16, 32)
 
 # DynAAN design-point AAN knobs.
 _DYNAAN_DP = {
@@ -144,7 +149,9 @@ SHAPE_MAP = {
 }
 
 
-_LAT_RE = re.compile(r"^(?P<stem>.+)-lat(?P<lat>\d+)$")
+_POLICY_RE = re.compile(
+    r"^(?P<stem>.+)-lat(?P<lat>\d+)(?:-bw(?P<width>\d+))?$"
+)
 
 
 @dataclass(frozen=True)
@@ -177,20 +184,30 @@ def _validate(name, value, valid):
         raise ValueError(f"unknown {name} '{value}'. Choose: {choices}")
 
 
-def _split_latency(name):
-    """Split a policy name into (stem, d2d_latency_cycles)."""
-    match = _LAT_RE.match(name or "")
+def _split_run_name(name):
+    """Split a policy name into (stem, latency cycles, optional width)."""
+    match = _POLICY_RE.match(name or "")
     if not match:
         raise ValueError(
-            f"policy '{name}' has no -lat<N> suffix; every policy name must "
-            f"end in -lat<cycles>, e.g. dynaan-lat100 or all-near-lat50"
+            f"invalid policy name '{name}'; expected <stem>-lat<cycles> "
+            f"or <stem>-lat<cycles>-bw<bytes>"
         )
-    return match.group("stem"), int(match.group("lat"))
+    width = match.group("width")
+    if width is not None:
+        width = int(width)
+        if width not in BANDWIDTH_WIDTHS:
+            choices = ", ".join(str(value) for value in BANDWIDTH_WIDTHS)
+            raise ValueError(
+                f"unsupported D2D link width '{width}' in '{name}'. "
+                f"Choose a non-default width from: {choices}; omit -bw for "
+                f"the 64 B/flit default"
+            )
+    return match.group("stem"), int(match.group("lat")), width
 
 
 def _resolve_shape(name):
     """Resolve a full policy name to (protocol-axis key, knob overrides)."""
-    stem, latency = _split_latency(name)
+    stem, latency, width = _split_run_name(name)
     if stem not in SHAPE_MAP:
         raise ValueError(
             f"unknown policy stem '{stem}' in '{name}'. Known stems: "
@@ -199,6 +216,8 @@ def _resolve_shape(name):
     base, knobs = SHAPE_MAP[stem]
     overrides = dict(knobs)
     overrides["d2d_link_latency"] = latency
+    if width is not None:
+        overrides["d2d_link_width"] = width
     return base, overrides
 
 
@@ -213,12 +232,19 @@ def ablation_overrides(top_policy):
 
 
 def all_policy_names():
-    """Every runnable policy name: {stem}-lat{N} over the canonical grid."""
-    return [
+    """Every runnable policy name over the canonical latency/width grid."""
+    default_width_names = [
         f"{stem}-lat{latency}"
         for stem in SHAPE_MAP
         for latency in LATENCIES
     ]
+    bandwidth_names = [
+        f"{stem}-lat{latency}-bw{width}"
+        for stem in SHAPE_MAP
+        for latency in LATENCIES
+        for width in BANDWIDTH_WIDTHS
+    ]
+    return default_width_names + bandwidth_names
 
 
 def resolve_amo_policy(
@@ -257,7 +283,8 @@ def add_amo_policy_args(parser):
         type=str,
         default="dynaan-lat100",
         choices=all_policy_names(),
-        help="Top-level AMO policy (<stem>-lat<cycles>; see amo_policy.py)",
+        help="Top-level AMO policy "
+        "(<stem>-lat<cycles>[-bw<4|8|16|32>]; omitted width means 64 B/flit)",
     )
     parser.add_argument(
         "--l1d-amo-policy",
@@ -308,7 +335,8 @@ def add_amo_policy_args(parser):
         "--d2d-link-width",
         type=int,
         default=None,
-        help="Cross-die link width in bytes/flit (fixed 64)",
+        help="Cross-die link width in bytes/flit (default 64; normally set "
+        "by an optional -bw<N> policy suffix)",
     )
     parser.add_argument(
         "--d2d-link-latency",

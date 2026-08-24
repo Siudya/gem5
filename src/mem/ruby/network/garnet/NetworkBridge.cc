@@ -54,7 +54,8 @@ NetworkBridge::NetworkBridge(const Params &p)
       enSerDes(true), mType(p.vtype), cdcLatency(p.cdc_latency),
       serDesLatency(p.serdes_latency), lastScheduledAt(0),
       lastD2DReadyAt(0), network(nullptr), vcsPerVnet(0),
-      d2dBuffersConfigured(false)
+      d2dBuffersConfigured(false),
+      bridgeTrafficStats(this, m_virt_nets)
 {
     if (mType == enums::LINK_OBJECT) {
         nLink->setLinkConsumer(this);
@@ -140,6 +141,40 @@ NetworkBridge::configureD2DBuffers()
 
 NetworkBridge::~NetworkBridge()
 {
+}
+
+NetworkBridge::BridgeTrafficStats::BridgeTrafficStats(
+    statistics::Group *parent, uint32_t vnets)
+    : statistics::Group(parent, "traffic"),
+      ADD_STAT(d2dMsgsTotal, "Messages sent toward the link, per vnet"),
+      ADD_STAT(d2dBytesTotal,
+               "Protocol bytes sent toward the link, per vnet"),
+      ADD_STAT(d2dAmoMsgs, "AMO-tagged messages sent toward the link, "
+               "per vnet"),
+      ADD_STAT(d2dAmoBytes, "AMO-tagged protocol bytes sent toward the "
+               "link, per vnet")
+{
+    d2dMsgsTotal.init(vnets).flags(statistics::nozero);
+    d2dBytesTotal.init(vnets).flags(statistics::nozero);
+    d2dAmoMsgs.init(vnets).flags(statistics::nozero);
+    d2dAmoBytes.init(vnets).flags(statistics::nozero);
+}
+
+void
+NetworkBridge::recordD2DMsg(flit *t_flit)
+{
+    const int vnet = t_flit->get_vnet();
+    if (vnet < 0 || static_cast<uint32_t>(vnet) >= m_virt_nets) {
+        return;
+    }
+    const int bytes = t_flit->msgSize;
+    bridgeTrafficStats.d2dMsgsTotal[vnet]++;
+    bridgeTrafficStats.d2dBytesTotal[vnet] += bytes;
+    const MsgPtr &msg = t_flit->get_msg_ptr();
+    if (msg && msg->getAmoTagged()) {
+        bridgeTrafficStats.d2dAmoMsgs[vnet]++;
+        bridgeTrafficStats.d2dAmoBytes[vnet] += bytes;
+    }
 }
 
 void
@@ -247,6 +282,14 @@ NetworkBridge::neutralize(int vc, int eCredit)
 void
 NetworkBridge::flitisizeAndSend(flit *t_flit)
 {
+    // Traffic accounting: one count per message (head flit), taken at the
+    // source-side bridge before any width conversion, so the counts are
+    // messages and protocol bytes regardless of the link's flit width.
+    if (mType == enums::OBJECT_LINK &&
+        (t_flit->get_type() == HEAD_ || t_flit->get_type() == HEAD_TAIL_)) {
+        recordD2DMsg(t_flit);
+    }
+
     // Serialize-Deserialize only if it is enabled
     if (enSerDes) {
         // Calculate the target-width

@@ -1266,13 +1266,13 @@ action(Initiate_AtomicReturn_LocalWrite, desc="") {
         tbe.actions.pushNB(Event:SendCompData);
       }
       tbe.actions.pushNB(Event:TagArrayWrite);
-      amoStats.incMigrate();
+      amoStats.incMigrate(); tbe.amoExecPath := AMOExecPath:Migrate;
       delegato_handled := true;
     }
   }
 
   if (delegato_handled == false) {
-    amoStats.incCentralize();
+    amoStats.incCentralize(); tbe.amoExecPath := centralExecPath(tbe);
     tbe.central_ar := true;
     // Data in HNF cache; no SNF fetch needed.
     tbe.ar_ds_req  := true;
@@ -1379,13 +1379,13 @@ action(Initiate_AtomicReturn_WriteBack, desc="") {
         tbe.actions.pushNB(Event:SendCompData);
       }
       tbe.actions.pushNB(Event:TagArrayWrite);
-      amoStats.incMigrate();
+      amoStats.incMigrate(); tbe.amoExecPath := AMOExecPath:Migrate;
       delegato_handled := true;
     }
   }
 
   if (delegato_handled == false) {
-    amoStats.incCentralize();
+    amoStats.incCentralize(); tbe.amoExecPath := centralExecPath(tbe);
     tbe.central_ar := true;
     tbe.dataToBeInvalid := true;
     tbe.ar_ds_dbid := true;
@@ -1465,7 +1465,7 @@ action(Initiate_AtomicNoReturn_LocalWrite, desc="") {
   }
 
   if (delegato_handled == false) {
-    amoStats.incCentralize();
+    amoStats.incCentralize(); tbe.amoExecPath := centralExecPath(tbe);
     if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
       tbe.actions.push(Event:SendSnpUnique);
     } else if (tbe.dir_sharers.count() > 0){
@@ -1512,7 +1512,7 @@ action(Initiate_AtomicNoReturn_WriteBack, desc="") {
   }
 
   if (delegato_handled == false) {
-    amoStats.incCentralize();
+    amoStats.incCentralize(); tbe.amoExecPath := centralExecPath(tbe);
     if ((tbe.dir_sharers.count() > 0) && tbe.dataMaybeDirtyUpstream) {
       tbe.actions.push(Event:SendSnpUnique);
     } else if (tbe.dir_sharers.count() > 0){
@@ -1548,8 +1548,9 @@ action(Initiate_AtomicReturn_Forward, desc="") {
     } else if (tbe.dataValid && tbe.dataUnique) {
       // AAN Hit: line resident with unique ownership → local completer.
       assert(tbe.dir_sharers.isEmpty());
-      aanBAT.incLocalHit();
+      aanBAT.noteHit(tbe.addr);
       amoStats.incAANHit();
+      tbe.amoExecPath := AMOExecPath:ProxiedHit;
       tbe.is_aan_hit := true;
       tbe.doCacheFill := true;
       tbe.dataToBeInvalid := false;
@@ -1564,9 +1565,10 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       Callback_AAN_AtomicReturn(tbe);
     } else if (aanBAT.shouldAdmit(tbe.addr, aan_amo_policy == 1, curTick(), cyclesToTicks(aan_bat_lifetime_cycles))) {
       // AAN Fill (BAT admits): fetch ownership via ReadUnique, overlap waits.
-      aanBAT.incFill();
+      aanBAT.noteFill(tbe.addr);
       amoStats.incAANMiss();
       amoStats.incAANFill();
+      tbe.amoExecPath := AMOExecPath:ProxiedFill;
       tbe.is_aan_hit := true;
       tbe.aan_fill_read_unique := true;
       tbe.doCacheFill := true;
@@ -1600,7 +1602,7 @@ action(Initiate_AtomicReturn_Forward, desc="") {
     if (tbe.dataValid && tbe.dataUnique && !tbe.dataMaybeDirtyUpstream &&
         tbe.dir_sharers.isEmpty()) {
       // 2.1 UD/UC, no upstream holders: near, no snoop, data in cache.
-      amoStats.incNearL2AMO();
+      amoStats.incNearL2AMO(); tbe.amoExecPath := AMOExecPath:NearL2;
       tbe.dataToBeInvalid := false;
       tbe.doCacheFill := true;
       tbe.ar_us_snp_snt := true;  // no snoop
@@ -1615,7 +1617,7 @@ action(Initiate_AtomicReturn_Forward, desc="") {
                !tbe.dir_sharers.isEmpty()) {
       // 2.2 UC_RSC/UD_RSC/UD_RSD: near, L2 holds Unique data, upstream SC/SD.
       // Snoop only invalidates (no dirty data returns), data in cache.
-      amoStats.incNearL2AMO();
+      amoStats.incNearL2AMO(); tbe.amoExecPath := AMOExecPath:NearL2;
       tbe.dataToBeInvalid := false;
       tbe.doCacheFill := true;
       tbe.ar_us_snp_dat := true;  // snoop returns no data we need
@@ -1629,7 +1631,7 @@ action(Initiate_AtomicReturn_Forward, desc="") {
       // 2.3 UC_RU/UD_RU/RU: near, data at upstream L1D (exclusive). Snoop with
       // RetToSrc to fetch the old value back; ar_us_snp_dat NOT preset (the
       // SnpRespData_I supplies the old value).
-      amoStats.incNearL2AMO();
+      amoStats.incNearL2AMO(); tbe.amoExecPath := AMOExecPath:NearL2;
       tbe.dataToBeInvalid := false;
       tbe.doCacheFill := true;
       tbe.ar_ds_req  := true;     // no far path -> stay BUSY_BLKD
@@ -1713,12 +1715,12 @@ action(Initiate_AtomicReturn_Miss_Alloc, desc="") {
       }
       tbe.actions.push(Event:WaitCompAck);
       tbe.actions.pushNB(Event:TagArrayWrite);
-      amoStats.incMigrate();
+      amoStats.incMigrate(); tbe.amoExecPath := AMOExecPath:Migrate;
       delegato_migrate := true;
     }
   }
   if (delegato_migrate == false) {
-    amoStats.incCentralize();
+    amoStats.incCentralize(); tbe.amoExecPath := centralExecPath(tbe);
     tbe.central_ar := true;
     // State I: no directory entry, no sharers. Fetch old value from SNF.
     tbe.ar_us_snp_snt := true;
@@ -1749,12 +1751,12 @@ action(Initiate_AtomicReturn_Miss, desc="") {
       tbe.actions.push(Event:WaitCompAck);
       tbe.actions.pushNB(Event:SendCompData);
       tbe.actions.pushNB(Event:TagArrayWrite);
-      amoStats.incMigrate();
+      amoStats.incMigrate(); tbe.amoExecPath := AMOExecPath:Migrate;
       delegato_migrate := true;
     }
   }
   if (delegato_migrate == false) {
-    amoStats.incCentralize();
+    amoStats.incCentralize(); tbe.amoExecPath := centralExecPath(tbe);
     tbe.central_ar := true;
     tbe.dataToBeInvalid := true;
     // State I: no directory entry, no sharers. Fetch old value from SNF.
@@ -1773,7 +1775,7 @@ action(Initiate_AtomicReturn_Miss, desc="") {
 
 action(Initiate_AtomicNoReturn_Miss_Alloc, desc="") {
   assert(is_HN);
-  amoStats.incCentralize();
+  amoStats.incCentralize(); tbe.amoExecPath := centralExecPath(tbe);
   tbe.actions.push(Event:SendReadNoSnp);
   if (comp_anr) {
     tbe.actions.push(Event:SendDBIDResp_ANR);
@@ -1793,7 +1795,7 @@ action(Initiate_AtomicNoReturn_Miss_Alloc, desc="") {
 
 action(Initiate_AtomicNoReturn_Miss, desc="") {
   assert(is_HN);
-  amoStats.incCentralize();
+  amoStats.incCentralize(); tbe.amoExecPath := centralExecPath(tbe);
   tbe.actions.push(Event:SendReadNoSnp);
   if (comp_anr) {
     tbe.actions.push(Event:SendDBIDResp_ANR);
@@ -2426,6 +2428,8 @@ action(Send_AtomicReturn_AANTransparentBypass, desc="") {
     out_msg.requestor := tbe.requestor;
     out_msg.fwdRequestor := tbe.requestor;
     out_msg.allowRetry := true;
+    // Latency attribution: the HN-F reports CentralViaAAN for this one.
+    out_msg.viaAAN := true;
     // Carry the original requester's slot-routing intent + its slot_id (held in
     // tbe.txnId) so the HN-F echoes usesSlotId back to the RN-F, which routes
     // the response via its slot index. (txnId already set by prepareRequest.)
@@ -2788,6 +2792,9 @@ action(Receive_ReqDataResp, desc="") {
         tbe.oldDataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
         tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
         tbe.isAtomicReturnValue := in_msg.isAtomicReturnValue;
+        if (in_msg.execPath != AMOExecPath:None) {
+          tbe.amoExecPath := in_msg.execPath;
+        }
         assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
         tbe.dataBlkValid.orMask(in_msg.bitMask);
         if (tbe.dataBlkValid.isFull()) {
@@ -2836,6 +2843,9 @@ action(Receive_ReqDataResp, desc="") {
         tbe.oldDataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
         tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
         tbe.isAtomicReturnValue := in_msg.isAtomicReturnValue;
+        if (in_msg.execPath != AMOExecPath:None) {
+          tbe.amoExecPath := in_msg.execPath;
+        }
         assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
         tbe.dataBlkValid.orMask(in_msg.bitMask);
         if (tbe.dataBlkValid.isFull()) {
@@ -2853,6 +2863,9 @@ action(Receive_ReqDataResp, desc="") {
         tbe.dataBlkValid.clear();
       }
       tbe.oldDataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+      if (in_msg.execPath != AMOExecPath:None) {
+        tbe.amoExecPath := in_msg.execPath;
+      }
       assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
       tbe.dataBlkValid.orMask(in_msg.bitMask);
       if (tbe.dataBlkValid.isFull()) {
@@ -2872,6 +2885,11 @@ action(Receive_ReqDataResp, desc="") {
       // Decrement pending
       if (tbe.expected_req_resp.receiveData(in_msg.type) == false) {
         error("Received unexpected message");
+      }
+      // Per-path AMO latency: harvest the executor's stamp off any
+      // completion data (None on everything else).
+      if (in_msg.execPath != AMOExecPath:None) {
+        tbe.amoExecPath := in_msg.execPath;
       }
       // Copy data to tbe only if we didn't have valid data or the received
       // data is dirty
@@ -3876,6 +3894,9 @@ action(Send_FwdSnpResp, desc="") {
   enqueue(rspOutPort, CHIResponseMsg, response_latency) {
     out_msg.addr := address;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
 
     // We have the data (locally or upstream) or are dropping it
@@ -3927,6 +3948,9 @@ action(Send_Data, desc="") {
     out_msg.addr := tbe.addr;
     out_msg.type := tbe.snd_msgType;
     out_msg.txnId := tbe.txnId;
+    // Per-path AMO latency: the executing node stamped tbe.amoExecPath; the
+    // old-value data carries it back to the issuing L1 (None otherwise).
+    out_msg.execPath := tbe.amoExecPath;
     // far-AR: the downstream NCBWrData (operand) must carry the peer completer's
     // slot (its DBID, captured in requestorSlot) + usesSlotId so the completer
     // routes it to its own TBE. Upstream CompData_I to the L1D keeps addr
@@ -3975,6 +3999,9 @@ action(Send_Data, desc="") {
     out_msg.bitMask.setMask(offset, range);
 
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
 
     out_msg.Destination.add(tbe.snd_destination);
   }
@@ -3989,6 +4016,9 @@ action(Send_RespSepData, desc="") {
     out_msg.addr := address;
     out_msg.type := CHIResponseType:RespSepData;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
   }
 }
@@ -4008,6 +4038,9 @@ action(Send_CompI, desc="") {
     out_msg.addr := address;
     out_msg.type := CHIResponseType:Comp_I;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
     out_msg.txnId := tbe.txnId;
     out_msg.dbid := tbe.txnId;
@@ -4020,6 +4053,9 @@ action(Send_CompUC, desc="") {
     out_msg.addr := address;
     out_msg.type := CHIResponseType:Comp_UC;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
     out_msg.txnId := tbe.txnId;
     out_msg.dbid := tbe.txnId;
@@ -4032,6 +4068,9 @@ action(Send_CompUC_Stale, desc="") {
     out_msg.addr := address;
     out_msg.type := CHIResponseType:Comp_UC;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
     out_msg.txnId := tbe.txnId;
     out_msg.dbid := tbe.txnId;
@@ -4047,6 +4086,9 @@ action(Send_CompUD_PD, desc="") {
     out_msg.addr := address;
     out_msg.type := CHIResponseType:Comp_UD_PD;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
     out_msg.txnId := tbe.txnId;
     out_msg.dbid := tbe.txnId;
@@ -4059,6 +4101,9 @@ action(Send_CompAck, desc="") {
     out_msg.addr := address;
     out_msg.type := CHIResponseType:CompAck;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(mapAddressToDownstreamMachine(tbe.addr));
     out_msg.txnId := tbe.txnId;
   }
@@ -4070,6 +4115,9 @@ action(Send_CompI_Stale, desc="") {
     out_msg.addr := address;
     out_msg.type := CHIResponseType:Comp_I;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
     out_msg.txnId := tbe.txnId;
     out_msg.dbid := tbe.txnId;
@@ -4085,6 +4133,9 @@ action(Send_CompDBIDResp, desc="") {
     out_msg.addr := address;
     out_msg.type := CHIResponseType:CompDBIDResp;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
     out_msg.txnId := tbe.txnId;
     out_msg.dbid := tbe.txnId;
@@ -4097,6 +4148,9 @@ action(Send_CompDBIDResp_Stale, desc="") {
     out_msg.addr := address;
     out_msg.type := CHIResponseType:CompDBIDResp;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
     out_msg.txnId := tbe.txnId;
     out_msg.dbid := tbe.txnId;
@@ -4112,6 +4166,9 @@ action(Send_DBIDResp, desc="") {
     out_msg.addr := address;
     out_msg.type := CHIResponseType:DBIDResp;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
     out_msg.dbid := tbe.txnId;
     // far-AR: route this DBIDResp to the requester via ITS slot (txnId =
@@ -4132,6 +4189,9 @@ action(Send_Comp_WU, desc="") {
     out_msg.addr := address;
     out_msg.type := CHIResponseType:Comp;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
   }
 }
@@ -4174,6 +4234,9 @@ action(Send_Comp_ANR, desc="") {
     out_msg.addr := address;
     out_msg.type := CHIResponseType:Comp;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
   }
 }
@@ -4188,6 +4251,9 @@ action(Send_SnpRespI, desc="") {
     }
     out_msg.type := CHIResponseType:SnpResp_I;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
   }
 }
@@ -4270,6 +4336,9 @@ action(Finalize_UpdateCacheFromTBE, desc="") {
     // make sure only deallocate the cache entry if data is invalid
     assert(tbe.dataValid == false);
     if (is_valid(cache_entry)) {
+      if (is_AAN) {
+        aanBAT.noteDrop(address);
+      }
       cache.deallocate(address);
       unset_cache_entry();
     }
@@ -4301,6 +4370,9 @@ action(Finalize_UpdateDirectoryFromTBE, desc="") {
 
 action(Deallocate_CacheBlock, desc="") {
   assert(is_valid(cache_entry));
+  if (is_AAN) {
+    aanBAT.noteDrop(address);
+  }
   cache.deallocate(address);
   unset_cache_entry();
 }
@@ -4551,7 +4623,8 @@ action(Callback_AtomicHit, desc="") {
   doAtomicLocal(tbe);
   sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
   if (tbe.reqType == CHIRequestType:AtomicLoad) {
-    amoStats.incNearL1AMO();
+    amoStats.incNearL1AMO(); tbe.amoExecPath := AMOExecPath:NearL1;
+    recordAMOPathLatency(tbe);
   }
   // AMO residency: record first local reuse
   if (is_valid(cache_entry) && cache_entry.amoFetched &&
@@ -4638,12 +4711,14 @@ action(Callback_Miss, desc="") {
     doAtomicLocal(tbe);
     sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
     if (tbe.reqType == CHIRequestType:AtomicLoad) {
-      amoStats.incNearL1AMO();
+      amoStats.incNearL1AMO(); tbe.amoExecPath := AMOExecPath:NearL1;
+      recordAMOPathLatency(tbe);
     }
   } else if (tbe.dataValid && tbe.dataAMOValid &&
              (tbe.reqType == CHIRequestType:AtomicLoad)) {
     DPRINTF(RubySlicc, "Atomic before %s\n", tbe.oldDataBlk);
     sequencer.atomicCallback(tbe.addr, tbe.oldDataBlk, false);
+    recordAMOPathLatency(tbe);
 
   // Delegato Migrate at L2: CompData_UD_PD arrived for AtomicReturn.
   // Data is in tbe.dataBlk (UD), AMO not yet executed. Execute locally.
@@ -5073,6 +5148,9 @@ action(Send_DvmTlbi_NCBWrData, desc="") {
     out_msg.bitMask.setMask(0, 8);
 
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
 
     out_msg.Destination.clear();
     out_msg.Destination.add(getMiscNodeMachine());
@@ -5094,6 +5172,9 @@ action(Send_DvmSync_NCBWrData, desc="") {
     out_msg.bitMask.setMask(0, 8);
 
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
 
     out_msg.Destination.clear();
     out_msg.Destination.add(getMiscNodeMachine());
@@ -5281,6 +5362,9 @@ action(Send_SnpAMODBIDResp, desc="Delegato: Owner sends DBIDResp to requester") 
     out_msg.addr := address;
     out_msg.type := CHIResponseType:DBIDResp;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.fwdRequestor);
     // dbid = this owner snp TBE's local slot_id, so the requester sends its
     // NCBWrData operand back tagged with it (+usesSlotId) and we route it to
@@ -5314,6 +5398,9 @@ action(Send_SnpAMOCompDBIDResp, desc="Delegato: Owner sends CompDBIDResp to requ
     out_msg.addr := address;
     out_msg.type := CHIResponseType:CompDBIDResp;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.fwdRequestor);
     out_msg.txnId := tbe.txnId;
     out_msg.dbid := tbe.txnId;
@@ -5338,6 +5425,9 @@ action(Send_SnpAMOResp, desc="Delegato: Owner sends SnpResp_AMO with reuse_bit t
   enqueue(rspOutPort, CHIResponseMsg, response_latency) {
     out_msg.addr := address;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
     out_msg.type := CHIResponseType:SnpResp_AMO;
     out_msg.reuse_bit := reuse_bit;
@@ -5357,6 +5447,9 @@ action(Send_SnpAMONoFwdResp, desc="Delegato: Owner sends SnpResp_AMO_NoFwd to HN
   enqueue(rspOutPort, CHIResponseMsg, response_latency) {
     out_msg.addr := address;
     out_msg.responder := machineID;
+    if (is_valid(tbe)) {
+      out_msg.amoTagged := tbe.amoTagged;
+    }
     out_msg.Destination.add(tbe.requestor);
     out_msg.type := CHIResponseType:SnpResp_AMO_NoFwd;
     out_msg.reuse_bit := reuse_bit;
@@ -5398,6 +5491,7 @@ action(Forward_SnpAMOResp, desc="Delegato: Forward upstream SnpAMO completion") 
       enqueue(rspOutPort, CHIResponseMsg, response_latency) {
         out_msg.addr := address;
         out_msg.responder := machineID;
+        out_msg.amoTagged := tbe.amoTagged;
         out_msg.Destination.add(tbe.requestor);
         out_msg.type := in_msg.type;
         out_msg.reuse_bit := in_msg.reuse_bit;

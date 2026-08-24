@@ -95,6 +95,14 @@ class Message
     virtual bool functionalWrite(Packet *pkt)
     { panic("functionalWrite(Packet) not implemented"); }
 
+    /**
+     * AMO traffic attribution (evaluation only). Protocol messages that
+     * carry an amoTagged field override this; everything else reports
+     * untagged. Read by the garnet D2D bridges to classify cross-die
+     * traffic without a protocol-header dependency.
+     */
+    virtual bool getAmoTagged() { return false; }
+
     //! Update the delay this message has experienced so far.
     void updateDelayedTicks(Tick curTime)
     {

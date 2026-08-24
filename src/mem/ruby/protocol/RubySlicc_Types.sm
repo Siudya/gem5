@@ -333,6 +333,9 @@ structure(AMOStats, external = "yes") {
     void incCentralize();
     void incAmoFetch();
     void incLocalReuse();
+    // Per-path latency accumulation; the int index mirrors
+    // recordAMOPathLatency() in CHI-cache-funcs.sm and AMOStats.hh PATH_NAMES.
+    void recordPathLatency(int, Tick);
 }
 
 // AAN bypass/admission table (BAT): filtered AAN rejects the first lookup of a
@@ -342,8 +345,12 @@ structure(AANAdmissionTable, external = "yes") {
     bool shouldAdmit(Addr, bool, Tick, Tick);
     void incDispatch();
     void incReceived();
-    void incLocalHit();
-    void incFill();
     void incBypass();
     void incAMOExec();
+    // Admission-quality tracking: noteFill/noteHit replace the old
+    // incFill/incLocalHit and additionally classify each admission as
+    // repaid/unrepaid when noteDrop sees its line leave the AAN.
+    void noteFill(Addr);
+    void noteHit(Addr);
+    void noteDrop(Addr);
 }

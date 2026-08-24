@@ -101,6 +101,21 @@ enumeration(CHIRequestType, desc="") {
   null;
 }
 
+// Execution path of an AMO, filled by the node that runs the RMW and carried
+// back to the issuing L1 on the old-value data message so the requester can
+// attribute end-to-end latency per path (evaluation only; no protocol role).
+enumeration(AMOExecPath, desc="Which endpoint executed an AMO") {
+  None;           // not an AMO completion / path unknown
+  NearL1;         // issuing core's L1
+  NearL2;         // issuing core's L2
+  Central;        // home HN-F, request arrived directly
+  CentralViaAAN;  // home HN-F, request forwarded by an AAN bypass
+  ProxiedHit;     // AAN, line resident
+  ProxiedFill;    // AAN, ownership fetched on demand
+  Migrate;        // home migrated the line to the issuer for local execution
+  Delegate;       // current owning core executed
+}
+
 structure(CHIRequestMsg, desc="", interface="Message") {
   Addr addr,                desc="Request line address";
   Addr accAddr,             desc="Original access address. Set for Write*Ptl and requests from the sequencer";
@@ -131,10 +146,19 @@ structure(CHIRequestMsg, desc="", interface="Message") {
   // Delegato fix_2: L1D piggybacks AMO reuse flag on writeback to L2
   bool child_amo_reused, default="false", desc="Delegato: L1D AMO reuse on this line";
 
+  // AMO traffic attribution (evaluation only): set on requests an AMO
+  // causes, inherited by every message the handling TBE emits, and read
+  // by the D2D SerDes bridges to count cross-die AMO traffic.
+  bool amoTagged, default="false", desc="Message is in an AMO's causal chain";
+  // Set by an AAN when it forwards a bypassed AtomicReturn to the home,
+  // so the HN-F can report CentralViaAAN instead of Central.
+  bool viaAAN, default="false", desc="Request was relayed by an AAN bypass";
+
   // No data for functional access
   bool functionalRead(Packet *pkt) { return false; }
   bool functionalRead(Packet *pkt, WriteMask &mask) { return false; }
   bool functionalWrite(Packet *pkt) { return false; }
+  bool getAmoTagged() { return amoTagged; }
 }
 
 enumeration(CHIResponseType, desc="...") {
@@ -182,12 +206,15 @@ structure(CHIResponseMsg, desc="", interface="Message") {
   bool reuse_bit,       desc="Delegato reuse feedback from owner", default="false";
   //NOTE: not in CHI and for debuging only
 
+  bool amoTagged,       desc="Message is in an AMO's causal chain", default="false";
+
   MessageSizeType MessageSize, default="MessageSizeType_Control";
 
   // No data for functional access
   bool functionalRead(Packet *pkt) { return false; }
   bool functionalRead(Packet *pkt, WriteMask &mask) { return false; }
   bool functionalWrite(Packet *pkt) { return false; }
+  bool getAmoTagged() { return amoTagged; }
 }
 
 enumeration(CHIDataType, desc="...") {
@@ -232,6 +259,9 @@ structure(CHIDataMsg, desc="", interface="Message") {
   Addr txnId,           desc="Transaction ID", default="0";
   bool usesSlotId,      desc="True if txnId carries a far-AR local slot_id (route via slot index)", default="false";
   bool isAtomicReturnValue, desc="Data is an atomic operation's old return value", default="false";
+
+  bool amoTagged,       desc="Message is in an AMO's causal chain", default="false";
+  AMOExecPath execPath, desc="Endpoint that executed the AMO (on old-value data)", default="AMOExecPath_None";
 
   MessageSizeType MessageSize, default="MessageSizeType_Data";
 
@@ -280,4 +310,6 @@ structure(CHIDataMsg, desc="", interface="Message") {
   bool functionalWrite(Packet *pkt) {
     return testAndWrite(addr, dataBlk, pkt);
   }
+
+  bool getAmoTagged() { return amoTagged; }
 }

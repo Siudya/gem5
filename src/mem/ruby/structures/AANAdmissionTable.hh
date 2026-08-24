@@ -31,6 +31,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include "base/statistics.hh"
@@ -107,6 +108,13 @@ class AANAdmissionTable
             if (entry->reuse < REUSE_MAX) {
                 ++entry->reuse;
             }
+            if (!entry->retouchCounted) {
+                // This candidate's first-touch rejection is now proven wrong
+                // in hindsight: the line did come back while the record
+                // lived. Counted once per allocated record.
+                ++aanStats.rejectsRetouched;
+                entry->retouchCounted = true;
+            }
             touchLRU(*entry);
             ++aanStats.batAdmits;
             return true;
@@ -121,10 +129,49 @@ class AANAdmissionTable
 
     void incDispatch()  { ++aanStats.dispatch; }
     void incReceived()  { ++aanStats.received; }
-    void incLocalHit()  { ++aanStats.localHit; }
     void incBypass()    { ++aanStats.bypass; }
-    void incFill()      { ++aanStats.fill; }
     void incAMOExec()   { ++aanStats.amoExec; }
+
+    // Admission-quality tracking: each admitted fill is classified when its
+    // line leaves the AAN (eviction or snoop recall) by whether it served at
+    // least one local hit while resident. Lines still resident at the stats
+    // dump sit in neither bucket, so fill >= fillsRepaid + fillsUnrepaid by
+    // at most the AAN array capacity.
+    void
+    noteFill(Addr addr)
+    {
+        ++aanStats.fill;
+        auto [it, inserted] = m_residentFills.emplace(getTag(addr), false);
+        if (!inserted) {
+            // A second fill without an observed drop: classify the stale
+            // record and restart tracking for the new residency.
+            classifyFill(it->second);
+            it->second = false;
+        }
+    }
+
+    void
+    noteHit(Addr addr)
+    {
+        ++aanStats.localHit;
+        auto it = m_residentFills.find(getTag(addr));
+        if (it != m_residentFills.end()) {
+            it->second = true;
+        }
+    }
+
+    // Called on every cache-block deallocation of the owning controller;
+    // no-op unless the block is a tracked AAN admission.
+    void
+    noteDrop(Addr addr)
+    {
+        auto it = m_residentFills.find(getTag(addr));
+        if (it == m_residentFills.end()) {
+            return;
+        }
+        classifyFill(it->second);
+        m_residentFills.erase(it);
+    }
 
   private:
     struct AANStatsGroup : public statistics::Group
@@ -140,7 +187,16 @@ class AANAdmissionTable
               ADD_STAT(batLookups, "AAN BAT: total shouldAdmit calls"),
               ADD_STAT(batAdmits,  "AAN BAT: admissions (nofilter + seen-again)"),
               ADD_STAT(batRejects, "AAN BAT: first-touch rejections"),
-              ADD_STAT(batExpires, "AAN BAT: entries found dead at lookup (lifetime spent)")
+              ADD_STAT(batExpires, "AAN BAT: entries found dead at lookup (lifetime spent)"),
+              ADD_STAT(fillsRepaid,
+                       "AAN: fills that served >=1 local hit before the line "
+                       "left the AAN (useful admissions)"),
+              ADD_STAT(fillsUnrepaid,
+                       "AAN: fills whose line left the AAN with zero local "
+                       "hits (false admissions)"),
+              ADD_STAT(rejectsRetouched,
+                       "AAN BAT: first-touch rejections whose line was "
+                       "touched again while its record lived (false bypasses)")
         {}
 
         statistics::Scalar dispatch;
@@ -153,6 +209,9 @@ class AANAdmissionTable
         statistics::Scalar batAdmits;
         statistics::Scalar batRejects;
         statistics::Scalar batExpires;
+        statistics::Scalar fillsRepaid;
+        statistics::Scalar fillsUnrepaid;
+        statistics::Scalar rejectsRetouched;
     } aanStats;
 
     static constexpr uint8_t REUSE_MAX = 31;  // 5-bit saturating
@@ -164,6 +223,7 @@ class AANAdmissionTable
         uint64_t lruStamp = 0;
         uint8_t reuse = 0;   // lifetime credits (5-bit saturating)
         Tick base = 0;       // start of the current lifetime window
+        bool retouchCounted = false;  // rejectsRetouched taken for this record
     };
 
     int m_sets = 0;
@@ -172,6 +232,20 @@ class AANAdmissionTable
     uint64_t m_lruCounter = 0;
 
     std::vector<std::vector<Entry>> m_table;
+
+    // Tag -> "served a local hit since its fill", for every admitted line
+    // currently resident in the AAN. Bounded by the AAN array capacity.
+    std::unordered_map<Addr, bool> m_residentFills;
+
+    void
+    classifyFill(bool repaid)
+    {
+        if (repaid) {
+            ++aanStats.fillsRepaid;
+        } else {
+            ++aanStats.fillsUnrepaid;
+        }
+    }
 
     int
     getSet(Addr addr) const
@@ -242,6 +316,7 @@ class AANAdmissionTable
             if (!entry.valid) {
                 entry.valid = true;
                 entry.tag = tag;
+                entry.retouchCounted = false;
                 touchLRU(entry);
                 return &entry;
             }
@@ -255,6 +330,7 @@ class AANAdmissionTable
         }
         victim->valid = true;
         victim->tag = tag;
+        victim->retouchCounted = false;
         touchLRU(*victim);
         return victim;
     }

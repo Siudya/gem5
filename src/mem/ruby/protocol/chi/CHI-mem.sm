@@ -173,6 +173,7 @@ machine(MachineType:Memory, "Memory controller interface") :
     MachineID requestor, desc="Requestor that originated this request";
     MachineID destination, desc="Where we are sending data";
     bool useDataSepResp, desc="Replies with DataSepResp instead of CompData";
+    bool amoTagged, default="false", desc="TBE serves an AMO's causal chain";
   }
 
   structure(TBETable, external ="yes") {
@@ -506,6 +507,7 @@ machine(MachineType:Memory, "Memory controller interface") :
       tbe.accAddr := in_msg.accAddr;
       tbe.accSize := in_msg.accSize;
       tbe.txnId := in_msg.txnId;
+      tbe.amoTagged := in_msg.amoTagged;
     }
   }
 
@@ -539,6 +541,7 @@ machine(MachineType:Memory, "Memory controller interface") :
       out_msg.addr := address;
       out_msg.type := CHIResponseType:ReadReceipt;
       out_msg.responder := machineID;
+      out_msg.amoTagged := tbe.amoTagged;
       out_msg.Destination.add(tbe.requestor);
     }
     // also send different type of data when ready
@@ -551,6 +554,7 @@ machine(MachineType:Memory, "Memory controller interface") :
       out_msg.addr := address;
       out_msg.type := CHIResponseType:CompDBIDResp;
       out_msg.responder := machineID;
+      out_msg.amoTagged := tbe.amoTagged;
       out_msg.Destination.add(tbe.requestor);
     }
   }
@@ -612,6 +616,7 @@ machine(MachineType:Memory, "Memory controller interface") :
     enqueue(datOutPort, CHIDataMsg, data_latency) {
       out_msg.addr := tbe.addr;
       out_msg.txnId := tbe.txnId;
+      out_msg.amoTagged := tbe.amoTagged;
       if (tbe.useDataSepResp) {
         out_msg.type := CHIDataType:DataSepResp_UC;
       } else {
