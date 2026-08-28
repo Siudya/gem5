@@ -302,9 +302,23 @@ NetworkBridge::flitisizeAndSend(flit *t_flit)
 
         DPRINTF(RubyNetwork, "Target width: %d Current: %d\n",
             target_width, cur_width);
-        assert(target_width != cur_width);
 
         int vc = t_flit->get_vc();
+
+        // An equal-width SerDes still models the bridge pipeline, traffic
+        // accounting, and long-link flow control; it only skips conversion.
+        if (target_width == cur_width) {
+            if (mType == enums::LINK_OBJECT &&
+                decouplesVc(t_flit->get_vnet())) {
+                if (t_flit->get_type() != CREDIT_) {
+                    coBridge->neutralize(vc, 1);
+                }
+                scheduleD2DFlit(t_flit, serDesLatency);
+            } else {
+                scheduleFlit(t_flit, serDesLatency);
+            }
+            return;
+        }
 
         if (target_width > cur_width) {
             // Deserialize

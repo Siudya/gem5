@@ -84,15 +84,10 @@ class CustomMesh(SimpleTopology):
                 # when the serdes flags are set; router-side width stays at
                 # ni_flit_size. NOTE: despite the Param docstring, link
                 # width units are bytes (ni_flit_size is in bytes).
-                # When the D2D width equals the mesh width (32B ablation
-                # point) the SerDes would assert on equal widths, so the
-                # link is created plain. SerDes links get a per-VC bridge
-                # depth below; equal-width long links retain the existing
-                # network-link buffer-depth override.
-                serdes = cross_link_width != mesh_link_width
-                serdes_vc_buffer_depth = (
-                    2 * cross_link_latency + 2 if serdes else 0
-                )
+                # Every D2D link traverses the same bridge path. Equal-width
+                # links use the bridge's 1:1 pass-through mode.
+                serdes = True
+                serdes_vc_buffer_depth = 2 * cross_link_latency + 2
                 link = IntLink(
                     link_id=self._link_count,
                     src_node=self._routers[src],
@@ -105,10 +100,6 @@ class CustomMesh(SimpleTopology):
                     dst_serdes=serdes,
                     serdes_vc_buffer_depth=serdes_vc_buffer_depth,
                 )
-                if not serdes:
-                    link.network_link.buffer_depth = (
-                        2 * cross_link_latency + 2
-                    )
             else:
                 link = IntLink(
                     link_id=self._link_count,
