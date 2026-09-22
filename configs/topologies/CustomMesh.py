@@ -332,6 +332,8 @@ class CustomMesh(SimpleTopology):
         d2d_latency = getattr(options, "d2d_link_latency", None)
         if d2d_latency is None:
             d2d_latency = options.cross_link_latency
+        elif d2d_latency == 100:
+            d2d_latency = 95
         self._makeMesh(
             IntLink,
             self._router_link_latency,
